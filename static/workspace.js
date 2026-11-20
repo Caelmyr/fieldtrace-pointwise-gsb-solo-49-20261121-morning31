@@ -158,6 +158,135 @@ function measureDialog(frame,models,refresh){
     await send("/api/ground-measures",values);notice("Ground distance saved.");await refresh();
   },{confirm:"Measure ground distance"});
 }
+const pointColors={pole:[98,219,232],contact:[133,239,158],shoulder:[242,198,111]};
+function heightState(){return {poles:[],subjects:[]};}
+function heightLines(state){
+  const lines=[];
+  for(const pole of state.poles)if(pole.base&&pole.top)lines.push([pole.base,pole.top,pointColors.pole]);
+  for(const subject of state.subjects)
+    if(subject.contact&&subject.shoulder)lines.push([subject.contact,subject.shoulder,pointColors.contact]);
+  return lines;
+}
+function heightPoints(state){
+  const points=[];
+  for(const pole of state.poles)
+    for(const key of ["base","top"])if(pole[key])points.push([pole[key],pointColors.pole]);
+  for(const subject of state.subjects){
+    if(subject.contact)points.push([subject.contact,pointColors.contact]);
+    if(subject.shoulder)points.push([subject.shoulder,pointColors.shoulder]);
+  }
+  return points;
+}
+function heightSketch(state){
+  const sequence=[];
+  const rebuild=()=>{
+    sequence.length=0;
+    state.poles.forEach(pole=>["base","top"].forEach(key=>sequence.push({kind:"pole",pole,key})));
+    state.subjects.forEach(subject=>["contact","shoulder"].forEach(key=>sequence.push({kind:"subject",subject,key})));
+  };
+  rebuild();
+  let step=0,onChange=()=>{};
+  const describe=()=>{
+    const item=sequence[step];
+    if(!item)return "All marked points placed. Check the form, then save the measurement.";
+    return item.kind==="pole"?`Click the ${item.key==="base"?"ground contact":"top"} of ${item.pole.name}.`
+      :`Click the ${item.key} for ${item.subject.name}.`;
+  };
+  const place=point=>{
+    const item=sequence[step];if(!item)return;
+    if(item.kind==="pole")item.pole[item.key]=point;else item.subject[item.key]=point;
+    step+=1;onChange();
+  };
+  return {describe,place,rebuild:()=>{rebuild();step=0;},changed:callback=>{onChange=callback;}};
+}
+function heightPlan(state,done=()=>{}){
+  showModal("Set up standing heights",[
+    field("How many reference poles?","pole_count",state.poles.length||3,{type:"number",min:2,max:8}),
+    field("How many animals?","subject_count",state.subjects.length||1,{type:"number",min:1,max:12}),
+  ],async(_,values)=>{
+    const poles=Number(values.pole_count),subjects=Number(values.subject_count);
+    state.poles=Array.from({length:poles},(_,i)=>state.poles[i]||{name:`Pole ${i+1}`,height_m:1.5});
+    state.subjects=Array.from({length:subjects},(_,i)=>state.subjects[i]||
+      {name:`Animal ${i+1}`,taxon:"deer",certainty:"observed"});
+    setTimeout(done,0);
+  },{confirm:"Use these counts"});
+}
+function heightDialog(frame,models,state,refresh,sketch){
+  if(!models.length){notice("Calibrate a ground plane for this deployment first.");return;}
+  const payload=values=>{
+    const body={...values};
+    body.poles=jsonField(body,"poles").map(row=>({...row,height_m:Number(row.height_m)}));
+    body.subjects=jsonField(body,"subjects");
+    body.frame=frame.id;
+    return body;
+  };
+  const existing=state.poles.some(p=>p.base||p.top)||state.subjects.some(s=>s.contact||s.shoulder);
+  showModal("Standing height from reference poles",[
+    field("Measurement title","name","Shoulder height",{required:true}),
+    pick("Ground plane","model",models.map(m=>[m.id,m.name]),state.model||models[0].id),
+    field("Reference poles","poles",JSON.stringify(state.poles.map(({name,base,top,height_m})=>
+      ({name,base,top,height_m})),null,2),
+      {type:"area",wide:true,help:"Each pole needs its ground contact, top and real height in metres."}),
+    field("Animals","subjects",JSON.stringify(state.subjects.map(({name,taxon,certainty,contact,shoulder,note})=>
+      ({name,taxon,certainty,contact,shoulder,note})),null,2),
+      {type:"area",wide:true,help:"Leave contact or shoulder null when that point is not visible; the height stays empty."}),
+    field("Maximum vertical offset (m)","max_offset_m",state.max_offset_m??.15,{type:"number",min:.01,max:1,step:.01}),
+    field("Allowed camera-height spread","max_camera_spread",state.max_camera_spread??.12,{type:"number",min:.02,max:.6,step:.01}),
+    h("div",{class:"full"},h("p",{class:"muted"},
+      "Check runs the same calibration as saving. A pole that misses the shared vertical direction, or disagrees on camera height, is listed and excluded; a record held at two poles is kept but not measured. An animal without a visible contact or shoulder keeps a blank height.")),
+    h("div",{class:"full"},button("Check poles and animals",async(trigger)=>{
+      const form=trigger.closest("form");
+      form.querySelectorAll("[data-height-report]").forEach(node=>node.remove());
+      try{
+        const report=h("div",{class:"full","data-height-report":""},
+          heightReport(await send("/api/heights/preview",payload(data(form)))));
+        trigger.after(report);
+      }catch(exc){notice(exc.message);}
+    })),
+  ],async(_,values)=>{
+    const item=await send("/api/heights",payload(values));
+    notice("Standing heights saved.");await refresh();
+    setTimeout(()=>showHeightGuide(item),0);
+  },{confirm:"Save heights"});
+  if(existing&&sketch)sketch.rebuild();
+}
+function heightReport(report){
+  const calibration=report.calibration;
+  const head=calibration.status==="pass"
+    ? `Calibration passes · camera ${num(calibration.camera_height_m)} m (${num(calibration.camera_height_range_m[0])}–${num(calibration.camera_height_range_m[1])} m)`
+    : `Calibration held · ${calibration.reason}`;
+  const sensitivity=[calibration.lean_sensitivity_deg!=null
+    ? `A pole leaning towards or away from the camera by more than about ${num(calibration.lean_sensitivity_deg,1)}° would be excluded.`
+    : "With only two poles there is no spare pole to check against, so a leaning pole cannot be detected.",
+    calibration.lean_note].filter(Boolean).join(" ");
+  return h("div",{class:"full stacked"},
+    h("strong",null,head),
+    h("p",{class:"muted"},sensitivity,
+      ` ${calibration.retained_poles} of ${calibration.poles.length} poles retained; ${calibration.redundancy} spare.`),
+    table(["Pole","Height","Camera from pole","Vertical offset","Status"],
+      calibration.poles.map(p=>[p.name,p.height_m!=null?`${num(p.height_m)} m`:"—",
+        p.camera_height_m!=null?`${num(p.camera_height_m)} m`:"—",
+        p.vertical_offset_m!=null?`${num(p.vertical_offset_m,3)} m`:"—",
+        p.retained?"Retained":p.reason||"Excluded"])),
+    table(["Animal","Shoulder height","Range","Status"],
+      report.subjects.map(s=>[s.name,s.status==="measured"?`${num(s.height_m)} m`:"left blank",
+        s.height_range_m?`${num(s.height_range_m[0])}–${num(s.height_range_m[1])} m`:"—",
+        s.status==="measured"?(s.caution||"Measured"):s.reason||"Held"])));
+}
+function showHeightGuide(item){
+  showModal(item.name,[h("div",{class:"full stacked"},
+    img(`/api/heights/${item.id}/guide.png?v=${item.version}`,"Pole calibration and measured animals"),
+    heightReport(item),
+    h("p",{class:"muted"},item.note||"")),],()=>true,{confirm:"Done"});
+}
+function loadHeight(frame,item,state,refresh,sketch){
+  const copy=(list)=>list.map(row=>JSON.parse(JSON.stringify(row)));
+  state.poles=copy(item.poles).map(({name,base,top,height_m})=>({name,base,top,height_m}));
+  state.subjects=copy(item.subjects).map(({name,taxon,certainty,contact,shoulder,note})=>
+    ({name,taxon,certainty,contact,shoulder,note}));
+  state.model=item.model_id;
+  heightDialog(frame,[{id:item.model_id,name:"Saved ground plane"}],state,refresh,sketch);
+}
 function identityChoice(frame,onChoose){
   return api("/api/identities").then(({identities})=>{
     if(!identities.length){notice("Create an individual reference in the Individuals view.");return;}
@@ -179,7 +308,9 @@ function readPixel(frame,point,output){
   });
 }
 function enableSketch(frame,ui,refresh){
+  const uiState={};
   const {scene,canvas,lead}=ui;
+  const heightStore=ui.heightState||null;
   const width=frame.extent[0],height=frame.extent[1];
   let state="",points=[];
   const ctx=canvas.getContext("2d");
@@ -196,11 +327,25 @@ function enableSketch(frame,ui,refresh){
       ctx.stroke();
     }
     for(const [x,y] of points){ctx.beginPath();ctx.arc(x*width,y*height,Math.max(3,width/165),0,Math.PI*2);ctx.fill();}
+    if(heightStore){
+      for(const [from,to,colour] of heightLines(heightStore)){
+        ctx.strokeStyle=`rgb(${colour.join(",")})`;ctx.beginPath();
+        ctx.moveTo(from[0]*width,from[1]*height);ctx.lineTo(to[0]*width,to[1]*height);ctx.stroke();
+      }
+      for(const [value,colour] of heightPoints(heightStore)){
+        ctx.fillStyle=`rgb(${colour.join(",")})`;ctx.beginPath();
+        ctx.arc(value[0]*width,value[1]*height,Math.max(3,width/165),0,Math.PI*2);ctx.fill();
+      }
+    }
   }
-  const set=(mode)=>{
+  let extra=null;
+  const set=(mode,settings=null)=>{
+    extra=settings;
     points=[];state=mode;scene.classList.toggle("marking",!!mode);
-    lead.replaceChildren(h("p",null,mode==="probe"?"Click the image to sample source pixels.":mode==="polygon"?
-      "Click three or more boundary points.":"Click the image to trace a sampling line."));
+    if(!(mode==="heights"&&settings?.lead===false))
+      lead.replaceChildren(h("p",null,mode==="probe"?"Click the image to sample source pixels.":mode==="polygon"?
+        "Click three or more boundary points.":mode==="heights"?
+        (settings?.text||"Click the image to place the marked height points."):"Click the image to trace a sampling line."));
     redraw();
   };
   canvas.addEventListener("pointerdown",async event=>{
@@ -208,6 +353,7 @@ function enableSketch(frame,ui,refresh){
     const r=canvas.getBoundingClientRect();
     const point=[Math.min(1,Math.max(0,(event.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(event.clientY-r.top)/r.height))];
     if(state==="probe"){points=[point];redraw();try{await readPixel(frame,point,lead);}catch(exc){notice(exc.message);}return;}
+    if(state==="heights"){if(extra?.place)await extra.place(point);redraw();return;}
     points.push(point);redraw();
     lead.replaceChildren(h("p",null,`${points.length} image point(s) selected`));
   });
@@ -216,12 +362,14 @@ function enableSketch(frame,ui,refresh){
     else if(state==="line"&&points.length>=2)localTrace(frame,refresh,saved());
     else if(state!=="probe")throw new Error("Choose enough points to finish.");
   };
+  Object.assign(uiState,{start:set,stop:()=>set(""),redraw,lead:text=>lead.replaceChildren(h("p",null,text))});
+  ui.heightApi(uiState);
   return h("div",{class:"actions"},
     button("Draw outline",()=>set("polygon")),button("Trace image line",()=>set("line")),
     button("Probe image",()=>set("probe")),button("Undo point",()=>{points.pop();redraw();}),
     button("Finish sketch",finish),button("Clear sketch",()=>{set("");lead.replaceChildren();}));
 }
-function viewer(frame,refresh){
+function viewer(frame,refresh,heightUi=null){
   const image=img(file(frame.id,"work"),`Current camera photo ${frame.name}`,"");
   const canvas=h("canvas",{width:frame.extent[0],height:frame.extent[1],"aria-hidden":"true"});
   const scene=h("div",{class:"scene"},image,canvas);
@@ -240,7 +388,8 @@ function viewer(frame,refresh){
     if(i===0)current=trigger;
     return trigger;
   }));
-  return h("figure",{class:"viewer",style:{margin:"0"}},scene,tools,enableSketch(frame,{canvas,scene,lead},refresh),lead);
+  const toolsPanel=enableSketch(frame,{canvas,scene,lead,heightState:heightUi?.state,heightApi:heightUi?.attach||(()=>{})},refresh);
+  return h("figure",{class:"viewer",style:{margin:"0"}},scene,tools,toolsPanel,lead);
 }
 function detailsPanel(frame,apiContext){
   const {refresh,reviewDialog}=apiContext;
@@ -264,14 +413,57 @@ async function auditHistory(frame){
 }
 export async function frameWorkbench(id,tools){
   const frame=await api(`${PREFIX}/${id}`);
-  const [models,near]=await Promise.all([api(`/api/ground-planes?deployment=${frame.deployment_id}`),
-    api(`/api/neighbours?frame=${id}&neighbours=2${frame.event_id?"&event="+frame.event_id:""}`)]);
+  const [models,near,heights]=await Promise.all([api(`/api/ground-planes?deployment=${frame.deployment_id}`),
+    api(`/api/neighbours?frame=${id}&neighbours=2${frame.event_id?"&event="+frame.event_id:""}`),
+    api(`/api/heights?frame=${id}`)]);
   const refresh=tools.refresh;
+  const state=heightState();
+  let viewerUi=null;
+  const sketch={coordinator:null,start:null,redraw:()=>{}};
+  const coordinator=heightSketch(state);
+  coordinator.changed(()=>viewerUi?.lead(coordinator.describe()));
+  Object.assign(sketch,{
+    start:(mode,settings)=>viewerUi?.start(mode,settings),
+    redraw:()=>viewerUi?.redraw(),
+  });
+  sketch.coordinator=coordinator;
+  const openHeights=()=>heightPlan(state,()=>{
+    placeHeights();
+    notice("Point counts set. Click each marked point on the photo, then open the height form.");
+  });
+  const editHeights=()=>{
+    if(!state.poles.length&&!state.subjects.length){notice("Set up the pole and animal counts first.");return;}
+    heightDialog(frame,models.models,state,refresh,coordinator);
+    sketch.redraw();
+  };
+  const placeHeights=()=>{
+    if(!state.poles.length&&!state.subjects.length){notice("Set up the pole and animal counts first.");return;}
+    if(!viewerUi){notice("The photo is still loading. Try again in a moment.");return;}
+    state.poles.forEach(pole=>{pole.base=null;pole.top=null;});
+    state.subjects.forEach(subject=>{subject.contact=null;subject.shoulder=null;});
+    coordinator.rebuild();
+    viewerUi.lead(coordinator.describe());
+    viewerUi.start("heights",{text:coordinator.describe(),lead:false,place:coordinator.place});
+    viewerUi.redraw();
+  };
+  const reopen=item=>{loadHeight(frame,item,state,refresh,coordinator);sketch.redraw();};
+  const heightMenu=()=>{
+    const saved=heights.heights.length?heights.heights.map(item=>row(item.name,
+      `${item.measured_count} of ${item.subjects.length} animals measured`,
+      button("Open",()=>showHeightGuide(item)),
+      button("Reopen",()=>reopen(item)))):null;
+    showModal("Standing heights",[h("div",{class:"full stacked"},
+      h("div",{class:"actions"},button("Set up poles and animals",openHeights,"primary"),
+        button("Place marked points",placeHeights),button("Open height form",editHeights)),
+      h("p",{class:"muted"},"Three or more poles with known heights share one vertical direction in the ground plane; with only two the record is kept but held. Each animal is measured only where its ground contact and shoulder top are both marked and the line between them follows that direction."),
+      ...(saved||[empty("No standing height recorded for this photo yet.")]))],()=>true,{confirm:"Done"});
+  };
   return [title(frame.name,"Inspect and record evidence at the camera photo's original position.",
     frame.origin==="synthetic"&&badge("Synthetic training photo","synthetic"),
     button("Prepare evidence",()=>tools.evidenceForm([frame])),
     link("Download original photo",file(id,"source"),"download")),
-    h("div",{class:"workspace-grid"},h("div",{class:"stacked"},viewer(frame,refresh),
+    h("div",{class:"workspace-grid"},h("div",{class:"stacked"},viewer(frame,refresh,
+      {state,attach:api=>{viewerUi=api;}}),
       pane("Nearby camera frames",h("div",{class:"actions"},near.before.length&&thumbnails("Earlier",near.before),
         badge(`Photo ${near.index??"?"} of ${near.eligible}`),near.after.length&&thumbnails("Later",near.after)))),
       h("aside",{class:"stacked"},detailsPanel(frame,tools),
@@ -288,7 +480,8 @@ export async function frameWorkbench(id,tools){
         button("Edit",()=>createMark(frame,null,refresh,x)))):empty("Draw an outline using the camera image or enter its vertices."),
         button("Enter outline coordinates",()=>createMark(frame,[],refresh))),
       pane("Ground geometry",h("div",{class:"actions"},button("Calibrate ground plane",()=>groundPlane(frame,refresh)),
-        button("Measure ground distance",()=>measureDialog(frame,models.models,refresh))),
+        button("Measure ground distance",()=>measureDialog(frame,models.models,refresh)),
+        button("Measure standing heights",heightMenu)),
         models.models.map(model=>row(model.name,model.fit_pass?`${num(model.rms_m,3)} m fit error`:"Fit held",
           button("Open guide",()=>showModal("Ground reference guide",[
             h("div",{class:"full"},img(`/api/ground-planes/${model.id}/guide.png`,"Ground landmark support guide"))],

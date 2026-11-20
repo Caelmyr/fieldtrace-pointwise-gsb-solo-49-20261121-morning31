@@ -12,7 +12,7 @@ from .contracts import Conflict, Missing, now_text
 
 DOCUMENT_TABLES = {
     "stations", "deployments", "frames", "events", "marks", "outages", "glances",
-    "models", "measures", "identities", "portraits", "paths", "packets", "samples",
+    "models", "measures", "heights", "identities", "portraits", "paths", "packets", "samples",
     "reports",
 }
 SCHEMA = """
@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS measures(
     id TEXT PRIMARY KEY, frame_id TEXT NOT NULL REFERENCES frames(id), model_id TEXT NOT NULL REFERENCES models(id),
     version INT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS heights(
+    id TEXT PRIMARY KEY, frame_id TEXT NOT NULL REFERENCES frames(id), model_id TEXT NOT NULL REFERENCES models(id),
+    version INT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS heights_frame ON heights(frame_id, created_at);
 CREATE TABLE IF NOT EXISTS identities(
     id TEXT PRIMARY KEY, version INT NOT NULL, name TEXT NOT NULL, taxon TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
@@ -124,6 +129,7 @@ INDEX_COLUMNS = {
     "glances": {"frame_id", "kind", "name"},
     "models": {"deployment_id", "frame_id", "name"},
     "measures": {"frame_id", "model_id", "name"},
+    "heights": {"frame_id", "model_id", "name"},
     "identities": {"name", "taxon"},
     "portraits": {"identity_id", "frame_id", "name", "pose"},
     "paths": {"event_id", "name"},

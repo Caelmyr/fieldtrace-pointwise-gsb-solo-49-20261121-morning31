@@ -9,7 +9,7 @@ from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
-from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
+from . import heights, inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
 from .config import (
     DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
     POSES, REVIEW_STATES, STATIC, TAXA,
@@ -219,6 +219,23 @@ def register_inspections(api, store, work):
     def measure_ground():
         return geometry.save_measure(store, body()), 201
 
+    @api.post("/api/heights/preview")
+    def preview_heights():
+        return heights.preview_heights(store, body())
+
+    @api.post("/api/heights")
+    def measure_heights():
+        return heights.save_heights(store, body()), 201
+
+    @api.get("/api/heights")
+    def list_heights():
+        return heights.list_heights(store, request.args)
+
+    @api.get("/api/heights/<key>/guide.png")
+    @work
+    def height_guide(key):
+        return png(heights.height_guide(store, identifier(key)))
+
     @api.get("/api/identities")
     def identities():
         return identity.find_identities(store, request.args)
@@ -423,7 +440,8 @@ def create_app(root=DATA):
 
     @app.get("/api/records/<category>/<key>")
     def typed_record(category, key):
-        if category not in {"samples", "reports", "paths", "glances", "measures", "portraits", "outages"}:
+        if category not in {"samples", "reports", "paths", "glances", "measures", "heights",
+                            "portraits", "outages"}:
             raise Missing("record")
         with store.use() as db:
             item = db.one(category, identifier(key))
