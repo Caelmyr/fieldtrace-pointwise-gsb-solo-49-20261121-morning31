@@ -467,8 +467,9 @@ async function evidenceForm(preselected=[]){
   const selection=frames.slice(0,32);
   const result=h("div",{class:"full"});
   let objectURL;
-  const inputs=(form)=>({...data(form),frames:new FormData(form).getAll("frames"),show_marks:form.elements.show_marks.checked,
-    share:form.elements.share.checked,landscape:form.elements.landscape.checked});
+  const inputs=(form)=>{const values={...data(form),frames:new FormData(form).getAll("frames"),show_marks:form.elements.show_marks.checked,
+    share:form.elements.share.checked,landscape:form.elements.landscape.checked};
+    values.window=jsonField(values,"window",null);return values;};
   const overlay=showModal("Prepare inspection evidence",[
     field("Evidence title","name","Camera inspection",{required:true}),
     pick("Output","output",[["contact","Printable contact sheet"],["packets","Portable ZIP bundle"]],"contact"),
@@ -476,6 +477,7 @@ async function evidenceForm(preselected=[]){
     pick("Layout","layout",[["two","Four photos per page"],["grid","Six photos per page"],["wide","Three wide panels"]],"two"),
     pick("Photo order","order",[["selection","Current selection"],["time","Resolved camera time"]],"time"),
     check("Landscape paper","landscape",false),check("Use privacy masks for sharing","share",true),check("Include annotations","show_marks",true),
+    field("Share window [x,y,width,height] (optional)","window","",{wide:true,help:"Normalized full-image coordinates. Exported panels, the PDF and the received record show only this region; outlines crossing its edge are marked as cut."}),
     choices("Photos to include","frames",selection.map(x=>[x.id,x.name]),preselected.length?selection.map(x=>x.id):[selection[0].id]),
     button("Preview first page",async()=>{const blob=await send("/api/contact/preview",inputs(overlay.form));
       if(objectURL)URL.revokeObjectURL(objectURL);objectURL=URL.createObjectURL(blob);result.replaceChildren(img(objectURL,"Preview of first contact sheet page"));
@@ -505,6 +507,12 @@ async function onePacket(key){
   const item=await api(`/api/packets/${key}`);
   const have=(label)=>item.assets.some(asset=>asset.label===label);
   const integrity=h("div");
+  const region=(r)=>r.share_window&&pane(`Shared region · ${r.name}`,
+    h("p",{class:"muted"},`Window ${JSON.stringify(r.share_window.window)} on the full ${r.share_window.working_extent.join(" × ")} working image · pixels ${r.share_window.window_px.join(", ")}. Outlines cut by the window edge are dashed in the panel and listed here in full-image coordinates for cross-checking against the original.`),
+    r.share_window.clipped_marks.length?table(["Outline","Kind","Cut edges","Source polygon (full image)"],
+      r.share_window.clipped_marks.map(m=>[m.name,human(lookups.marks,m.kind),m.edges.join(", "),JSON.stringify(m.source_polygon)])):
+      h("p",null,"No annotation outlines are cut by the shared region."),
+    r.share_window.clipped_restricted?h("p",{class:"muted"},`${r.share_window.clipped_restricted} privacy mask(s) continue beyond the shared region.`):null);
   return [title(item.name,`${item.kind} · ${item.frames.length} camera frames`,
     have("pdf")&&link("Download PDF",file(key,"pdf"),"download primary"),
     have("packet")&&link("Download ZIP",file(key,"packet"),"download"),
@@ -514,10 +522,11 @@ async function onePacket(key){
       integrity.replaceChildren(pane("Attachment verification",table(["File","State","Bytes"],result.assets.map(r=>[r.label,r.state,r.bytes]))));
     })),
     integrity,have("contact")&&pane(null,img(file(key,"contact"),"First inspection contact sheet")),
-    pane("Photo index",table(["Photo","Station","Lighting","UTC","Evidence"],item.frames.map((r,i)=>[
-      r.name,r.site,r.illumination,r.time_utc,item.kind==="received"?
+    pane("Photo index",table(["Photo","Station","Lighting","UTC","Region","Evidence"],item.frames.map((r,i)=>[
+      r.name,r.site,r.illumination,r.time_utc,r.share_window?badge("shared region"):"—",item.kind==="received"?
         link("Inspection image",file(key,`image-${String(i+1).padStart(3,"0")}`),"download"):
-        recordLink("Open local source","frame",r.frame_ref)])),item.status==="verified"&&badge("Verified bundle"))];
+        recordLink("Open local source","frame",r.frame_ref)])),item.status==="verified"&&badge("Verified bundle")),
+    ...item.frames.map(region)];
 }
 async function render(){
   const ticket=++routeRun;

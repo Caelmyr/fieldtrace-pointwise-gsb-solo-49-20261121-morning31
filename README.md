@@ -21,7 +21,7 @@ Use **Load training survey** on Overview. It generates 16 original procedural tr
 - **Events** previews fixed-gap camera groups, holds unresolved order, supports reviewed events and freezes an inspection strip with links back to camera frames. Manual event edits remain available.
 - **Individuals** stores cropped witness markings with body side, illumination and source visibility. Compare retained witnesses for manual interpretation.
 - **Survey reports** records active station hours with outages and overlapping cameras, counts reviewed confirmed triggers, and lays out activity in local clock time. Frozen sample worklists have a reproducible seed and per-entry decisions.
-- **Evidence** previews contact sheets, freezes PDFs and optionally creates a portable ZIP. Sharing copies hide restricted regions and strip source metadata from the JPEG panels. Local verification checks the provided manifest, image geometry and file digests and retains indexed inspection copies. Review camera/library records and download their CSV or report attachments.
+- **Evidence** previews contact sheets, freezes PDFs and optionally creates a portable ZIP. Sharing copies hide restricted regions and strip source metadata from the JPEG panels. An optional share window crops the exported panels, PDF and received record to a region of the selected photo; outlines cut by the window edge are drawn as cut and listed with full-image coordinates so the recipient can cross-check them. Local verification checks the provided manifest, image geometry and file digests and retains indexed inspection copies. Review camera/library records and download their CSV or report attachments.
 
 ## Limits and readings
 
