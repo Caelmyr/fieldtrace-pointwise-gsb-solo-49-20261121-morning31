@@ -13,7 +13,7 @@ from .contracts import Conflict, Missing, now_text
 DOCUMENT_TABLES = {
     "stations", "deployments", "frames", "events", "marks", "outages", "glances",
     "models", "measures", "identities", "portraits", "paths", "packets", "samples",
-    "reports",
+    "reports", "tracks",
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stations(
@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS paths(
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES events(id),
     version INT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tracks(
+    id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    version INT NOT NULL, name TEXT NOT NULL, taxon TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tracks_event ON tracks(event_id, name);
 CREATE TABLE IF NOT EXISTS packets(
     id TEXT PRIMARY KEY, version INT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
@@ -127,6 +133,7 @@ INDEX_COLUMNS = {
     "identities": {"name", "taxon"},
     "portraits": {"identity_id", "frame_id", "name", "pose"},
     "paths": {"event_id", "name"},
+    "tracks": {"event_id", "name", "taxon"},
     "packets": {"kind", "name"},
     "samples": {"name"},
     "reports": {"kind", "name"},

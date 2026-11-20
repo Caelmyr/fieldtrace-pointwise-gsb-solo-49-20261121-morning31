@@ -200,13 +200,22 @@ def inspect_frame(store, key):
         frame = db.one("frames", key)
         deployment = db.one("deployments", frame["deployment_id"])
         criterion = (("frame_id", "=", key),)
+        event_link = db.membership([key]).get(key)
+        tracks = []
+        if event_link:
+            tracks = [
+                {"id": row["id"], "name": row["name"]}
+                for row in db.matching("tracks", where=(("event_id", "=", event_link),))
+                if any(point["frame_id"] == key for point in row["points"])
+            ]
         return frame | {
             "deployment": deployment,
             "station": db.one("stations", frame["station_id"]),
             "marks": db.matching("marks", where=criterion, order=("created_at", "ASC")),
             "glances": db.matching("glances", where=criterion),
             "measures": db.matching("measures", where=criterion),
-            "event_id": db.membership([key]).get(key),
+            "event_id": event_link,
+            "tracks": tracks,
             "assets": db.assets(key),
         }
 

@@ -9,7 +9,7 @@ from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
-from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
+from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture, tracks
 from .config import (
     DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
     POSES, REVIEW_STATES, STATIC, TAXA,
@@ -296,6 +296,22 @@ def register_events(api, store, work):
     @api.post("/api/event-paths")
     def trace_path():
         return events.save_path(store, body()), 201
+
+    @api.post("/api/events/<key>/tracks/preview")
+    def preview_event_tracks(key):
+        return tracks.preview_tracks(store, identifier(key), body())
+
+    @api.post("/api/events/<key>/tracks")
+    def save_event_tracks(key):
+        return tracks.save_tracks(store, identifier(key), body()), 201
+
+    @api.get("/api/events/<key>/tracks")
+    def list_event_tracks(key):
+        return tracks.list_tracks(store, identifier(key))
+
+    @api.delete("/api/tracks/<key>")
+    def delete_track(key):
+        return tracks.remove_track(store, identifier(key), body())
 
     @api.get("/api/neighbours")
     def neighbours():

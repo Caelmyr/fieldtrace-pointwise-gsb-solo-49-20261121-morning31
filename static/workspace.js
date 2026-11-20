@@ -244,13 +244,15 @@ function viewer(frame,refresh){
 }
 function detailsPanel(frame,apiContext){
   const {refresh,reviewDialog}=apiContext;
-  return pane("Camera evidence",definition([
+  const pairs=[
     ["Station",frame.station.name],["Deployment",frame.deployment.name],["Capture time",stamp(frame)],
     ["Time evidence",frame.time.basis],["Clock uncertainty",frame.time.uncertainty_s==null?"—":`${frame.time.uncertainty_s} s`],
     ["Lighting",human(lookups.lighting,frame.illumination)],["Review",human(lookups.review,frame.review)],
     ["Animals",list(frame.taxa.map(x=>human(lookups.taxa,x)))],["Image support",pct(frame.supported_fraction)],
     ["Source dimensions",frame.source_extent.join(" × ")],
-  ]),h("div",{class:"actions"},button("Review photo",()=>reviewDialog([frame]),"primary"),
+  ];
+  if(frame.tracks?.length)pairs.push(["Individual tracks",frame.tracks.map(track=>track.name).join(", ")]);
+  return pane("Camera evidence",definition(pairs),h("div",{class:"actions"},button("Review photo",()=>reviewDialog([frame]),"primary"),
     button("Review camera time",()=>reviseTime(frame,refresh)),
     frame.event_id&&recordLink("Open trigger event","event",frame.event_id)),
   frame.review_note&&h("p",null,frame.review_note),detail("Raw camera metadata",frame.camera));

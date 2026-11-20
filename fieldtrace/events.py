@@ -162,10 +162,10 @@ def register_event(store, form, *, key=None):
             previous = db.one("events", key)
             if previous["deployment_id"] != deployment:
                 raise SurveyError("An event cannot move to a different deployment.", field="deployment")
-            if db.count("paths", equal={"event_id": key}):
+            if db.count("paths", equal={"event_id": key}) or db.count("tracks", equal={"event_id": key}):
                 old_ids = {row["id"] for row in db.event_members(key)}
                 if old_ids != set(ids):
-                    raise Conflict("A saved ground path refers to this event's original frame set.")
+                    raise Conflict("Saved ground paths or individual tracks refer to this event's original frame set.")
             event = db.replace("events", key, revision(form), lambda old: old | payload, action="camera event updated")
         db.set_event_members(event["id"], [item["id"] for item in frames])
         return public_event(db, event, include_frames=True)

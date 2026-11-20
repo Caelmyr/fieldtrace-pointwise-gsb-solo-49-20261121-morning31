@@ -289,6 +289,7 @@ async function pathDialog(event){
 }
 async function oneEvent(key){
   const event=await api(`/api/events/${key}`), cat=await catalog();
+  const saved=await api(`/api/events/${key}/tracks`);
   return [title(event.name,`${event.deployment.name} · ${event.frame_count} photos`,
     button("Build event strip",()=>stripDialog(event),"primary"),button("Trace ground positions",()=>pathDialog(event)),
     button("Edit event",async()=>eventEdit(cat,await getFrameList(),event)),
@@ -299,7 +300,120 @@ async function oneEvent(key){
     frameCards(event.frames,selected,frameOpen),
     ...event.paths.map(x=>pane(x.name,definition([["Supported segments",x.support_segments],["Supported ground length",`${num(x.total_supported_m)} m`],
       ["Resolved intervals",x.time_resolved]]),detail("Ground trace evidence",x.steps))),
+    ...trackSection(event,saved.tracks),
   ];
+}
+const trackDrafts={};
+function segmentLabel(track){
+  const first=track.points[0],last=track.points[track.points.length-1];
+  return `${track.key} · ${track.points.length} circle${track.points.length>1?"s":""} · ${first.frame_name} → ${last.frame_name}`;
+}
+function circleRows(points){
+  return points.map(p=>row(recordLink(p.frame_name,"frame",p.frame_id),`${p.mark_name} · ${p.certainty}`));
+}
+function decisionBlock(draft,byKey,decision){
+  return h("fieldset",null,
+    h("legend",null,`Crossing at ${decision.frame_name}`),
+    h("p",{class:"muted"},"More than one continuation fits the outlined positions. Choose the joins yourself, or leave the segments unlinked. Open the photos to check first."),
+    h("div",{class:"actions"},recordLink("Open crossing photo","frame",decision.frame_id)),
+    h("p",{class:"muted"},`Earlier segments: ${decision.incoming.map(key=>segmentLabel(byKey[key])).join("  ·  ")}`),
+    decision.outgoing.map(key=>{
+      const select=h("select",null,
+        h("option",{value:""},"Leave unlinked"),
+        decision.options.filter(o=>o.outgoing===key).map(o=>
+          h("option",{value:o.incoming},`Join ${o.incoming} → ${key} · distance ${o.distance}${o.gap_frames?` · ${o.gap_frames} hidden frame${o.gap_frames>1?"s":""}`:""}`)));
+      const name=`${decision.key}:${key}`;
+      select.value=draft.selections[name]||"";
+      select.addEventListener("change",()=>{draft.selections[name]=select.value;});
+      return h("label",null,`Later segment ${segmentLabel(byKey[key])}`,select);
+    }));
+}
+async function saveTracks(event,draft){
+  const entries=Object.entries(draft.selections).filter(([,value])=>value);
+  const incoming=entries.map(([,value])=>value);
+  if(new Set(incoming).size!==incoming.length)throw new Error("Two later segments cannot join the same earlier segment.");
+  const grouped={};
+  for(const [combo,to] of entries){
+    const [decision,outgoing]=combo.split(":");
+    (grouped[decision]??=[]).push({incoming:to,outgoing});
+  }
+  const proposal=draft.proposal;
+  const result=await send(`/api/events/${event.id}/tracks`,{proposal:proposal.proposal,gate:proposal.gate,max_gap:proposal.max_gap,
+    name:draft.form?data(draft.form).track_name||"":"",
+    resolutions:Object.entries(grouped).map(([decision,links])=>({decision,links}))});
+  delete trackDrafts[event.id];
+  notice(`${result.tracks.length} track(s) saved${result.unlinked.length?` · ${result.unlinked.length} single circle(s) left unlinked`:""}.`);
+  await refresh();
+}
+function renderProposal(event,draft){
+  const proposal=draft.proposal;
+  if(!proposal.animal_marks)return empty("No animal outlines on this event's photos yet. Draw animal regions on the frames first.");
+  const byKey=Object.fromEntries(proposal.tracklets.map(track=>[track.key,track]));
+  const involved=new Set(proposal.decisions.flatMap(d=>[...d.incoming,...d.outgoing]));
+  const chained=proposal.tracklets.filter(track=>track.points.length>1||involved.has(track.key));
+  const singles=proposal.tracklets.filter(track=>track.points.length===1&&!involved.has(track.key));
+  return h("div",{class:"stacked tight"},
+    h("p",null,`${proposal.animal_marks} circle(s) · ${chained.length} segment(s) · ${proposal.decisions.length} crossing(s) to confirm`),
+    chained.map(track=>h("details",null,
+      h("summary",null,`${segmentLabel(track)} · ${human(lookups.taxa,track.taxon)}`),
+      circleRows(track.points))),
+    singles.length?h("p",{class:"muted"},`${singles.length} single circle(s) stay unlinked.`):null,
+    proposal.decisions.map(decision=>decisionBlock(draft,byKey,decision)),
+    h("div",{class:"actions"},
+      button("Save tracks",()=>saveTracks(event,draft),"primary"),
+      button("Discard proposal",()=>{delete trackDrafts[event.id];refresh();})));
+}
+function removeTrack(track){
+  showModal("Remove individual track",[
+    h("p",{class:"full"},`Remove “${track.name}”? The source outlines stay on the photos.`),
+  ],async()=>{
+    await api(`/api/tracks/${track.id}`,{method:"DELETE",json:{version:track.version}});
+    notice("Track removed.");await refresh();
+  },{confirm:"Remove"});
+}
+function trackCard(track){
+  const timeline=[];
+  track.points.forEach((point,index)=>{
+    if(index){
+      const join=track.links[index-1],notes=[];
+      if(join.gap_frames)notes.push(`${join.gap_frames} hidden frame${join.gap_frames>1?"s":""} · no circle invented`);
+      if(join.origin==="reviewed")notes.push("confirmed join");
+      if(notes.length)timeline.push(h("p",{class:"muted"},`↳ ${notes.join(" · ")}`));
+    }
+    timeline.push(row(recordLink(point.frame_name,"frame",point.frame_id),
+      `${point.mark_name} · ${point.certainty}${point.mark_state&&point.mark_state!=="current"?` · outline ${point.mark_state}`:""}`));
+  });
+  return pane(track.name,
+    h("div",{class:"actions"},badge(human(lookups.taxa,track.taxon)),
+      badge(`${track.points.length} circles`),
+      track.gap_frames?badge(`${track.gap_frames} hidden frame${track.gap_frames>1?"s":""}`):null,
+      track.reviewed_links?badge(`${track.reviewed_links} confirmed join${track.reviewed_links>1?"s":""}`):null,
+      track.stale?badge("Outlines changed since saving","held"):null),
+    h("div",null,timeline),
+    h("div",{class:"actions"},button("Remove track",()=>removeTrack(track),"danger")));
+}
+function trackSection(event,tracks){
+  if(tracks.length)return tracks.map(trackCard);
+  const mount=h("div",{class:"stacked tight"});
+  const form=h("form",{class:"filter"},
+    field("Link gate (image fraction)","gate","0.12",{type:"number",min:"0.02",max:"0.6",step:"0.01"}),
+    field("Hidden frames a link may span","max_gap","2",{type:"number",min:"0",max:"8"}),
+    field("Track name prefix (optional)","track_name","",{wide:false}),
+    h("button",{type:"submit",class:"primary"},"Build proposal"));
+  form.addEventListener("submit",async action=>{
+    action.preventDefault();
+    try{
+      const values=data(form);
+      const proposal=await send(`/api/events/${event.id}/tracks/preview`,{gate:values.gate,max_gap:values.max_gap});
+      trackDrafts[event.id]={proposal,selections:{},form};
+      mount.replaceChildren(renderProposal(event,trackDrafts[event.id]));
+    }catch(error){notice(error.message);}
+  });
+  const draft=trackDrafts[event.id];
+  if(draft){draft.form=form;mount.replaceChildren(renderProposal(event,draft));}
+  return [pane("Individual tracks",
+    h("p",{class:"muted"},"Chain each animal's outlined circles across this event's frames. Clear steps link on their own; a crossing that fits two continuations waits for your decision, and hidden spans are bridged without inventing circles."),
+    form,mount)];
 }
 function identityForm(current=null){
   const existing=current||{};
