@@ -69,10 +69,15 @@ def save_deployment(store, form, key=None):
 
 
 def deployment_rollup(db, record):
+    # Bounded scan: the rollup feeds list views, and a single deployment holds at
+    # most MAX_FRAME_COUNT frames. Holds beyond the first 2500 still surface on the
+    # frame cards and in the calibration preview, which has its own full check.
+    frames = db.matching("frames", where=(("deployment_id", "=", record["id"]),), limit=2500)
     return record | {
         "frame_count": db.count("frames", equal={"deployment_id": record["id"]}),
         "event_count": db.count("events", equal={"deployment_id": record["id"]}),
         "outage_count": db.count("outages", equal={"deployment_id": record["id"]}),
+        "clock_hold_count": sum(1 for frame in frames if frame.get("clock_hold")),
     }
 
 
@@ -260,6 +265,8 @@ def edit_stamp(store, key, form):
         if event_link and initial["stamp_utc"] != clock["utc"]:
             raise Conflict("Detach the frame from its event, or rebuild the event before changing its time.",
                            facts={"event_id": event_link})
+        if initial.get("clock_hold"):
+            next_values["clock_hold"] = None
         return db.replace("frames", key, revision(form), lambda old: old | next_values, action="camera time reviewed")
 
 

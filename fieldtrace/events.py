@@ -50,6 +50,9 @@ def propose(ordered, threshold):
     current = []
     for frame in ordered:
         key = frame["id"]
+        if frame.get("clock_hold"):
+            held.append({"frame_id": key, "reason": "clock calibration held for manual review"})
+            continue
         if frame["stamp_utc"] is None or frame["time_window"] != "inside":
             held.append({"frame_id": key, "reason": frame["time_window"]})
             continue
@@ -153,6 +156,9 @@ def register_event(store, form, *, key=None):
         frames = sorted(db.documents("frames", ids), key=frame_sort)
         if any(row["deployment_id"] != deployment for row in frames):
             raise SurveyError("An ordinary trigger event covers just one camera deployment.", field="frames")
+        if any(row.get("clock_hold") for row in frames):
+            raise SurveyError("Resolve the held camera clock readings before adding these photos to a trigger event.",
+                              field="frames")
         payload = event_payload(form, deployment, frames)
         if payload["state"] == "confirmed" and any(row["stamp_utc"] is None for row in frames):
             raise SurveyError("A confirmed event needs resolved timestamps for all its frames.", field="frames")
@@ -188,6 +194,8 @@ def resolve_preset_groups(store, form):
         catalog = {row["id"]: row for row in db.documents("frames", flat)}
         if any(row["deployment_id"] != deployment or row["time_window"] != "inside" for row in catalog.values()):
             raise Conflict("Frame deployment or time changed after preview. Refresh the suggestions.")
+        if any(row.get("clock_hold") for row in catalog.values()):
+            raise Conflict("Resolve the held clock readings before accepting automatic trigger groups.")
         events = []
         for group in chosen:
             frames = sorted([catalog[key] for key in group], key=frame_sort)

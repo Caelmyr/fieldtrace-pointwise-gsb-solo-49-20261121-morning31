@@ -140,6 +140,7 @@ export function frameCards(frames,selection,callback){
       img(file(f.id,"thumbnail"),`Camera photo ${f.name}`,"thumbnail"),
       h("strong",null,f.name)),
     h("div",{class:"title-row"},h("small",null,stamp(f)),badge(human(lookups.review,f.review),f.review)),
+    f.clock_hold&&h("div",{class:"title-row"},badge("Clock hold · needs review","held")),
     h("div",{class:"title-row"},h("small",null,human(lookups.lighting,f.illumination)),
       f.origin==="synthetic"&&badge("Synthetic","synthetic")),
     selection&&h("label",{class:"check"},h("input",{type:"checkbox",checked:selection.has(f.id),onchange:event=>

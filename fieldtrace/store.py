@@ -13,7 +13,7 @@ from .contracts import Conflict, Missing, now_text
 DOCUMENT_TABLES = {
     "stations", "deployments", "frames", "events", "marks", "outages", "glances",
     "models", "measures", "identities", "portraits", "paths", "packets", "samples",
-    "reports",
+    "reports", "calibrations",
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stations(
@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS reports(
     id TEXT PRIMARY KEY, version INT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS calibrations(
+    id TEXT PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id),
+    version INT NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, doc TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS calibrations_deployment ON calibrations(deployment_id, created_at);
 CREATE TABLE IF NOT EXISTS assets(
     owner_id TEXT NOT NULL, label TEXT NOT NULL, digest TEXT NOT NULL, media_type TEXT NOT NULL,
     bytes INT NOT NULL, PRIMARY KEY(owner_id, label)
@@ -130,6 +136,7 @@ INDEX_COLUMNS = {
     "packets": {"kind", "name"},
     "samples": {"name"},
     "reports": {"kind", "name"},
+    "calibrations": {"deployment_id", "name", "state"},
 }
 
 

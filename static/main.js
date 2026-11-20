@@ -124,6 +124,57 @@ function cameraLog(cat,initial){
     notice(`${response.changed.length} camera times recorded.`);await refresh();
   },{confirm:"Apply selected times"});
 }
+function anchorExample(){
+  return [
+    {frame:"<frame id from Photos>",watch_time:"2026-10-02T08:00:00+00:00",uncertainty_s:2,side:"unknown",note:"watch and camera in one photo"},
+  ];
+}
+function windowExample(){
+  return [{start:"2026-10-04T10:00:00+00:00",end:"2026-10-04T12:00:00+00:00",note:"battery swap, clock jumped"}];
+}
+function clockCalibration(cat,initial){
+  const output=h("div",{class:"full"});
+  let result;
+  const dialog=showModal("Calibrate camera clock",[
+    pick("Deployment","deployment_id",depChoices(cat),initial||""),
+    field("Battery-swap windows (JSON)","swap_windows",JSON.stringify(windowExample(),null,2),
+      {type:"area",wide:true,help:"Marked periods where the camera side of a photo cannot be assumed. Leave [] if there was no jump."}),
+    field("Watch-vs-camera anchor photos (JSON)","anchors",JSON.stringify(anchorExample(),null,2),
+      {type:"area",wide:true,help:"Each anchor needs the photo frame id, the trusted watch time with offset, and uncertainty seconds."}),
+    field("Anchor residual tolerance (s)","residual_tolerance_s",120,{type:"number",min:1,max:86400}),
+    field("Calibration record name","name","Piecewise clock calibration",{wide:true}),
+    button("Preview calibration",async()=>{
+      const values=data(dialog.form);
+      values.swap_windows=jsonField(values,"swap_windows");
+      values.anchors=jsonField(values,"anchors");
+      result=await send("/api/clock-calibration/preview",values);
+      const segRows=result.segments.map(s=>[s.label,`${s.start_utc} → ${s.end_utc}`,
+        s.anchor_count,s.model?`${s.model.status} · β=${num(s.model.beta,5)} · rms ${num(s.model.rms_s,1)} s`:"no model — review anchors"]);
+      const anchorRows=result.anchors.map(a=>[a.line,a.frame_name,a.watch_utc,a.declared_side||"—",
+        a.residual_s??"—",`${a.status}${a.reason?": "+a.reason:""}`]);
+      const frameRows=result.frames.filter(r=>r.status!=="unchanged").map(r=>[
+        r.frame_name,r.previous_utc,r.proposed_utc,`${r.status}${r.reason?": "+r.reason:""}`,
+        r.status==="ready"?h("input",{type:"checkbox",name:"apply",value:r.frame_id,checked:true,"aria-label":`Calibrate ${r.frame_name}`}):"—"]);
+      output.replaceChildren(
+        h("p",null,`${result.counts.ready} ready · ${result.counts.held} held for review · ${result.counts.blocked} blocked · ${result.counts.order_flips} order reversal(s)`),
+        h("h3",null,"Clock segments"),table(["Segment","True-time span","Anchors","Fitted model"],segRows),
+        h("h3",null,"Anchor photos"),table(["#","Photo","Watch time","Side","Residual (s)","Status"],anchorRows),
+        result.order_flips.length&&detail("Photo order reversals between the two sides",result.order_flips),
+        h("h3",null,"Frame corrections"),table(["Photo","Previous UTC","Proposed UTC","Status","Apply"],frameRows),
+      );
+    }),output,
+  ],async(form,values)=>{
+    if(!result)throw new Error("Preview the clock calibration first.");
+    values.swap_windows=jsonField(values,"swap_windows");
+    values.anchors=jsonField(values,"anchors");
+    values.selected=new FormData(form).getAll("apply");
+    values.versions=Object.fromEntries(result.frames.map(r=>[r.frame_id,r.version]));
+    values.deployment_version=result.deployment_version;
+    const response=await send("/api/clock-calibration/apply",values);
+    notice(`${response.changed.length} times calibrated · ${response.held.length} photos held for review.`);
+    await refresh();
+  },{confirm:"Apply selected corrections"});
+}
 async function stations(){
   const cat=await catalog();
   return [title("Camera stations","Organize deployments, camera clocks and recorded survey interruptions.",
@@ -132,8 +183,10 @@ async function stations(){
     h("div",{class:"grid cards"},cat.stations.map(site=>{
       const deploys=cat.deployments.filter(x=>x.station_id===site.id);
       return pane(site.name,h("p",{class:"muted"},`${human(lookups.habitats,site.habitat)} · ${site.timezone}`),
-        site.note&&h("p",null,site.note),deploys.map(dep=>row(dep.name,`${dep.frame_count} photos · ${dep.outage_count} outages`,
+        site.note&&h("p",null,site.note),deploys.map(dep=>row(dep.name,
+          `${dep.frame_count} photos · ${dep.outage_count} outages`+(dep.clock_hold_count?` · ${dep.clock_hold_count} clock holds`:""),
           button("Photos",()=>{filter.deployment_id=dep.id;filter.offset=0;route("frames");}),
+          button("Clock calibration",()=>clockCalibration(cat,dep.id)),
           button("Clock log",()=>cameraLog(cat,dep.id)),
           button("Outages",()=>deploymentOutages(dep)),button("Edit",()=>deployForm(cat,dep)))),
         h("div",{class:"actions"},button("Add deployment",()=>deployForm(cat,null,site.id)),

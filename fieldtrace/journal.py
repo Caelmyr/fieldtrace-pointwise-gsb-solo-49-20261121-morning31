@@ -13,7 +13,8 @@ from .evidence import safe_cell
 REGISTER_FIELDS = [
     ("name", "camera_file"), ("site", "station"), ("camera", "deployment"),
     ("capture", "utc"), ("local", "local_time"), ("basis", "time_evidence"),
-    ("window", "deployment_window"), ("review", "review"), ("taxa", "animals"),
+    ("window", "deployment_window"), ("clock_hold", "clock_hold"),
+    ("review", "review"), ("taxa", "animals"),
     ("classification", "lighting"), ("extent", "image_dimensions"), ("digest", "source_sha256"),
     ("version", "version"), ("origin", "source_kind"),
 ]
@@ -45,6 +46,7 @@ def frame_row(record, stations, cameras, audit, share):
         "camera": deployment["camera"] if not (station["private"] and share) else None,
         "capture": record["stamp_utc"], "local": local_label, "basis": record["time"]["basis"],
         "window": record["time_window"], "review": record["review"],
+        "clock_hold": "held" if record.get("clock_hold") else "",
         "taxa": ", ".join(record["taxa"]), "classification": record["illumination"],
         "extent": "x".join(map(str, record["extent"])), "digest": record["digest"],
         "origin": record["origin"], "version": record["version"],

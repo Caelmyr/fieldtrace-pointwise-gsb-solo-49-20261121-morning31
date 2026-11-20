@@ -244,7 +244,12 @@ function viewer(frame,refresh){
 }
 function detailsPanel(frame,apiContext){
   const {refresh,reviewDialog}=apiContext;
-  return pane("Camera evidence",definition([
+  const hold=frame.clock_hold?
+    pane("Clock reading held for review",h("p",{class:"muted"},frame.clock_hold.reason),
+      frame.clock_hold.candidates?.length&&table(["Clock segment","Calibrated UTC"],
+        frame.clock_hold.candidates.map(c=>[c.segment_label,c.proposed_utc])),
+      button("Review camera time now",()=>reviseTime(frame,refresh),"primary")):null;
+  return [pane("Camera evidence",definition([
     ["Station",frame.station.name],["Deployment",frame.deployment.name],["Capture time",stamp(frame)],
     ["Time evidence",frame.time.basis],["Clock uncertainty",frame.time.uncertainty_s==null?"—":`${frame.time.uncertainty_s} s`],
     ["Lighting",human(lookups.lighting,frame.illumination)],["Review",human(lookups.review,frame.review)],
@@ -253,7 +258,7 @@ function detailsPanel(frame,apiContext){
   ]),h("div",{class:"actions"},button("Review photo",()=>reviewDialog([frame]),"primary"),
     button("Review camera time",()=>reviseTime(frame,refresh)),
     frame.event_id&&recordLink("Open trigger event","event",frame.event_id)),
-  frame.review_note&&h("p",null,frame.review_note),detail("Raw camera metadata",frame.camera));
+  frame.review_note&&h("p",null,frame.review_note),detail("Raw camera metadata",frame.camera)),hold].filter(Boolean);
 }
 async function auditHistory(frame){
   const [a,b]=await Promise.all([api(`/api/history/${frame.id}`),api(`/api/attachment-check/${frame.id}?sha256=true`)]);
@@ -274,7 +279,7 @@ export async function frameWorkbench(id,tools){
     h("div",{class:"workspace-grid"},h("div",{class:"stacked"},viewer(frame,refresh),
       pane("Nearby camera frames",h("div",{class:"actions"},near.before.length&&thumbnails("Earlier",near.before),
         badge(`Photo ${near.index??"?"} of ${near.eligible}`),near.after.length&&thumbnails("Later",near.after)))),
-      h("aside",{class:"stacked"},detailsPanel(frame,tools),
+      h("aside",{class:"stacked"},...detailsPanel(frame,tools),
       pane("Image inspections",h("div",{class:"actions"},
         button("Map image quality",()=>qualityDialog(frame,refresh)),
         button("Find movement candidates",()=>comparisonDialog(frame,refresh,"motion")),

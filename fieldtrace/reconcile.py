@@ -176,6 +176,9 @@ def apply_reconcile(store, form):
                 "local_stamp": local_display(stamp, deployment["timezone"]),
                 "time_log": {"comment": row["comment"], "line": row["line"], "value": row["captured_at"]},
             }
+            frame = db.one("frames", row["frame_id"], optional=True)
+            if frame is not None and frame.get("clock_hold"):
+                patch["clock_hold"] = None
             expected = versions.get(row["frame_id"])
             if type(expected) != int:
                 raise Conflict("The original version of a selected photo is missing.")

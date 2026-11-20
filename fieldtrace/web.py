@@ -8,7 +8,7 @@ from functools import wraps
 from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
-from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
+from . import activity, alignment, calibration, catalog, effort, events, evidence, geometry, identity
 from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
 from .config import (
     DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
@@ -141,6 +141,23 @@ def register_catalog(api, store, work):
     @api.post("/api/camera-log/apply")
     def apply_camera_log():
         return reconcile.apply_reconcile(store, body())
+
+    @api.post("/api/clock-calibration/preview")
+    def preview_clock_calibration():
+        return calibration.preview_calibration(store, body())
+
+    @api.post("/api/clock-calibration/apply")
+    def apply_clock_calibration():
+        return calibration.apply_calibration(store, body()), 201
+
+    @api.get("/api/clock-calibration")
+    def clock_calibrations():
+        key = identifier(request.args.get("deployment"), "deployment", optional=True)
+        return calibration.list_calibrations(store, key)
+
+    @api.get("/api/clock-calibration/<key>")
+    def clock_calibration(key):
+        return calibration.read_calibration(store, identifier(key))
 
 
 def register_inspections(api, store, work):
@@ -423,7 +440,8 @@ def create_app(root=DATA):
 
     @app.get("/api/records/<category>/<key>")
     def typed_record(category, key):
-        if category not in {"samples", "reports", "paths", "glances", "measures", "portraits", "outages"}:
+        if category not in {"samples", "reports", "paths", "glances", "measures", "portraits", "outages",
+                            "calibrations"}:
             raise Missing("record")
         with store.use() as db:
             item = db.one(category, identifier(key))
