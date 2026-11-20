@@ -6,7 +6,10 @@ import math
 
 from .catalog import revision
 from .clock import time_pair
-from .config import DEFAULT_EVENT_GAP, MAX_EVENT_FRAMES, MAX_SEARCH_FRAMES, MAX_WALK_STEPS, MOTION_DIRECTIONS
+from .config import (
+    DEFAULT_BOUNDARY_MARGIN, DEFAULT_EVENT_GAP, MAX_EVENT_FRAMES, MAX_SEARCH_FRAMES,
+    MAX_WALK_STEPS, MOTION_DIRECTIONS,
+)
 from .contracts import (
     Conflict, Limit, SurveyError, identifier, identity_list, integer, list_value, need_object,
     option, unit_point, word,
@@ -75,9 +78,40 @@ def describe_group(index, frames):
     }
 
 
+def near_boundary(gap, threshold, margin):
+    seconds = gap["seconds"]
+    if seconds is None:
+        return False
+    if gap["status"] == "clock overlap":
+        return True
+    return abs(seconds - threshold) <= margin
+
+
+def boundary_view(decisions, groups, threshold, margin):
+    location, brief = {}, {}
+    for ordinal, members in enumerate(groups, 1):
+        for frame in members:
+            location[frame["id"]] = ordinal
+            brief[frame["id"]] = frame
+    results = []
+    for gap in decisions:
+        if not near_boundary(gap, threshold, margin):
+            continue
+        left, right = brief[gap["left"]], brief[gap["right"]]
+        left_group, right_group = location[gap["left"]], location[gap["right"]]
+        results.append(gap | {
+            "kind": "within" if left_group == right_group else "between",
+            "left_group": left_group, "right_group": right_group,
+            "left_name": left["name"], "right_name": right["name"],
+            "left_stamp": left["local_stamp"], "right_stamp": right["local_stamp"],
+        })
+    return results
+
+
 def preview_events(store, form):
     deployment = identifier(form.get("deployment_id"), "deployment")
     threshold = integer(form.get("gap_s"), "gap_s", 2, 3600, default=DEFAULT_EVENT_GAP)
+    margin = integer(form.get("margin_s"), "margin_s", 1, 300, default=DEFAULT_BOUNDARY_MARGIN)
     cap = integer(form.get("limit"), "limit", 1, MAX_SEARCH_FRAMES, default=400)
     with store.use() as db:
         db.one("deployments", deployment)
@@ -88,7 +122,9 @@ def preview_events(store, form):
     groups, held, decisions = propose(newest, threshold)
     return {
         "groups": [describe_group(i, members) for i, members in enumerate(groups, 1)],
-        "held": held, "gaps": decisions, "gap_s": threshold, "already_assigned": len(assigned),
+        "held": held, "gaps": decisions, "gap_s": threshold, "margin_s": margin,
+        "boundaries": boundary_view(decisions, groups, threshold, margin),
+        "already_assigned": len(assigned),
         "truncated": len(all_rows) > cap,
     }
 
@@ -171,9 +207,24 @@ def register_event(store, form, *, key=None):
         return public_event(db, event, include_frames=True)
 
 
+def confirmed_joins(form):
+    raw = form.get("joins") or []
+    pairs = set()
+    for entry in list_value(raw, "joins", max_items=60):
+        node = need_object(entry, "join")
+        left = identifier(node.get("left"), "left")
+        right = identifier(node.get("right"), "right")
+        if left == right:
+            raise SurveyError("A confirmed join needs two different camera frames.", field="joins")
+        pairs.add((left, right))
+    return pairs
+
+
 def resolve_preset_groups(store, form):
     deployment = identifier(form.get("deployment_id"), "deployment")
     threshold = integer(form.get("gap_s"), "gap_s", 2, 3600, default=DEFAULT_EVENT_GAP)
+    margin = integer(form.get("margin_s"), "margin_s", 1, 300, default=DEFAULT_BOUNDARY_MARGIN)
+    joins = confirmed_joins(form)
     raw_groups = list_value(form.get("groups"), "groups", min_items=1, max_items=30)
     chosen = [identity_list(group, "frames", limit=MAX_EVENT_FRAMES) for group in raw_groups]
     flat = [key for group in chosen for key in group]
@@ -193,18 +244,30 @@ def resolve_preset_groups(store, form):
             frames = sorted([catalog[key] for key in group], key=frame_sort)
             local = frames[0]["local_stamp"]
             title = f"{location['name']} · {local['date']} {local['clock']}"
-            events.append(save_suggested(db, deployment, title, frames, threshold))
+            events.append(save_suggested(db, deployment, title, frames, threshold, joins=joins, margin=margin))
     return {"events": events}
 
 
-def save_suggested(db, deployment, title, frames, threshold):
+def save_suggested(db, deployment, title, frames, threshold, *, joins=frozenset(), margin=0):
     start = event_time(frames)
     boundaries = [gap_stats(a, b, threshold) for a, b in zip(frames, frames[1:])]
-    if any(item["status"] != "keep" for item in boundaries):
-        raise Conflict("A selected suggested event now spans an uncertain trigger gap.")
+    bridged = []
+    for gap, left, right in zip(boundaries, frames, frames[1:]):
+        if gap["status"] == "keep":
+            continue
+        seconds = gap["seconds"]
+        confirmed = (left["id"], right["id"]) in joins and seconds is not None and seconds <= threshold + margin
+        if not confirmed:
+            raise Conflict("A selected suggested event now spans an uncertain trigger gap.")
+        bridged.append({
+            "left": left["id"], "right": right["id"],
+            "left_name": left["name"], "right_name": right["name"],
+            "seconds": seconds, "range_s": gap["range_s"], "status": gap["status"],
+        })
     event = db.append("events", {
         "name": title[:85], "deployment_id": deployment, "stamp_utc": start["start_utc"],
         "state": "draft", "caption": "", "gap_s": threshold, "time_span": start,
+        "joined_gaps": bridged,
     }, action="trigger group accepted")
     db.set_event_members(event["id"], [row["id"] for row in frames])
     return public_event(db, event)

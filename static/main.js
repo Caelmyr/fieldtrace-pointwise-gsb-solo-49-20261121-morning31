@@ -2,6 +2,7 @@ import {
   api,badge,button,check,choices,data,definition,detail,empty,field,file,frameCards,h,human,img,jsonField,
   link,list,lookups,metric,notice,num,pane,pct,pick,q,recordLink,route,row,send,setLookups,showModal,stamp,table,title,workspace,
 } from "./ui.js";
+import {composeEventGroups} from "./boundaries.js";
 import {frameWorkbench} from "./workspace.js";
 
 const navItems=[["home","Overview"],["frames","Photos"],["events","Events"],["stations","Stations"],
@@ -192,6 +193,35 @@ async function frames(){
       result.more&&button("Next page",()=>{filter.offset+=filter.limit;return refresh();}))];
 }
 
+function boundarySide(id,name,stampInfo,role){
+  return h("div",{class:"boundary-side"},
+    h("a",{href:`#frame/${id}`,target:"_blank",rel:"noopener",title:"Open this photo in a new tab"},
+      img(file(id,"thumbnail"),`Camera photo ${name}`,"thumbnail")),
+    h("strong",null,name),
+    h("small",null,`${role} · ${stampInfo?.wall_time?.replace("T"," ")||"time unresolved"}`));
+}
+function boundaryCard(record,boundary,index){
+  const choice=(value,text)=>h("label",{class:"check"},
+    h("input",{type:"radio",name:`boundary-${index}`,value,checked:value==="time"}),text);
+  const override=boundary.kind==="within"?
+    choice("split","Split into two events — signs of a new entry"):
+    choice("join","Join as one event — positions stay continuous");
+  return h("section",{class:"card tight"},
+    h("div",{class:"boundary-compare"},
+      boundarySide(boundary.left,boundary.left_name,boundary.left_stamp,
+        boundary.kind==="within"?`Group ${boundary.left_group}`:`Group ${boundary.left_group} tail`),
+      h("div",{class:"boundary-gap"},h("strong",null,`${num(boundary.seconds,1)} s`),
+        badge(boundary.status),
+        h("small",null,boundary.kind==="within"?`inside group ${boundary.left_group}`:
+          `group ${boundary.left_group} → group ${boundary.right_group}`)),
+      boundarySide(boundary.right,boundary.right_name,boundary.right_stamp,
+        boundary.kind==="within"?`Group ${boundary.right_group}`:`Group ${boundary.right_group} head`)),
+    h("fieldset",null,h("legend",null,"Boundary decision"),
+      h("div",{class:"choices"},
+        choice("time",`Follow the ${record.gap_s} s rule`),
+        override,
+        choice("pending","Pending — keep these photos unassigned"))));
+}
 function eventProposal(cat){
   if(!cat.deployments.length){notice("Add a camera deployment first.");return;}
   const output=h("div",{class:"full"});
@@ -199,10 +229,16 @@ function eventProposal(cat){
   const dialog=showModal("Find trigger groups",[
     pick("Deployment","deployment_id",depChoices(cat),filter.deployment_id||cat.deployments[0].id),
     field("Separate groups after seconds","gap_s",45,{type:"number",min:2,max:3600}),
+    field("Review gaps within ± seconds of the limit","margin_s",15,{type:"number",min:1,max:300,
+      help:"Borderline gaps list their burst tail and head photos below for a side-by-side look."}),
     button("Preview groups",async()=>{
       record=await send("/api/events/preview",data(dialog.form));
       output.replaceChildren(
         h("p",null,`${record.groups.length} candidate group(s) · ${record.held.length} photos held`),
+        record.boundaries.length?h("div",{class:"full stacked"},
+          h("h3",null,"Near-threshold boundaries"),
+          h("p",{class:"muted"},"Compare the tail and head photos at each borderline gap. The time rule applies unless you join, split or defer it."),
+          record.boundaries.map((boundary,i)=>boundaryCard(record,boundary,i))):null,
         record.groups.length?choices("Select trigger groups","group",record.groups.map((item,i)=>[
           String(i),`${item.first} · ${item.count} photos`]),record.groups.map((_,i)=>String(i))):empty("No unassigned images with resolved camera time."),
         record.held.length&&detail("Held camera files",record.held),
@@ -210,9 +246,16 @@ function eventProposal(cat){
     }),output,
   ],async(form,values)=>{
     if(!record)throw new Error("Preview trigger groups first.");
-    values.groups=new FormData(form).getAll("group").map(index=>record.groups[Number(index)].ids);
+    const decisions=record.boundaries.map((_,i)=>new FormData(form).get(`boundary-${i}`)||"time");
+    const plan=composeEventGroups(record,decisions,new FormData(form).getAll("group"));
+    if(!plan.groups.length)throw new Error("Every selected group is held by a pending boundary. Nothing to save yet.");
+    for(const key of Object.keys(values))if(key.startsWith("boundary-"))delete values[key];
+    values.groups=plan.groups;
+    values.joins=plan.joins;
+    values.margin_s=record.margin_s;
     const result=await send("/api/events/approve",values);
-    notice(`${result.events.length} draft events saved.`);await refresh();
+    notice(`${result.events.length} draft events saved${plan.held.length?` · ${plan.held.length} photo(s) kept pending`:""}.`);
+    await refresh();
   },{confirm:"Save selected events"});
 }
 function eventEdit(cat,frameList,current=null){
@@ -296,6 +339,8 @@ async function oneEvent(key){
     h("section",{class:"stats"},metric("Review conclusion",event.review_coverage.conclusion),
       metric("Pending frames",event.review_coverage.pending),metric("Elapsed seconds",event.time_span.duration_s??"—")),
     event.caption&&pane("Event note",h("p",null,event.caption)),
+    event.joined_gaps?.length?pane("Operator-joined gaps",event.joined_gaps.map(gap=>
+      row(`${gap.left_name} → ${gap.right_name}`,`${num(gap.seconds,1)} s gap · joined on continuous-position evidence`))):null,
     frameCards(event.frames,selected,frameOpen),
     ...event.paths.map(x=>pane(x.name,definition([["Supported segments",x.support_segments],["Supported ground length",`${num(x.total_supported_m)} m`],
       ["Resolved intervals",x.time_resolved]]),detail("Ground trace evidence",x.steps))),
