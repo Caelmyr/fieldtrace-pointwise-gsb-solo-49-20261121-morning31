@@ -167,6 +167,47 @@ def observe_animal(bg, rng, pos, sample):
     return result.convert("RGB")
 
 
+def wind_grass(bg, seed, phase):
+    """A fixed left-side grass tussock whose blades sway between empty frames.
+
+    Root positions and blade shapes are deterministic for a given seed, so the
+    clump occupies the same camera area in every frame; only the tip sway
+    changes with ``phase``.  This models the wind-blown vegetation that a naive
+    two-photo difference would outline as an animal.
+    """
+    rng = np.random.default_rng(seed * 7919 + 17)
+    width, height = bg.size
+    roots = []
+    blade_count = 132
+    base_x, base_y = 126, height - 18
+    for _ in range(blade_count):
+        roots.append((float(rng.normal(base_x, 46)), float(rng.uniform(height - 78, height - 8)),
+                      float(rng.uniform(46, 178)), float(rng.uniform(0.55, 1.55)),
+                      float(rng.uniform(-0.55, 0.55))))
+    overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    sway = math.sin(phase * math.pi) * 26.0
+    for index, (root_x, root_y, length, lean, flutter) in enumerate(roots):
+        tip_x = root_x + lean * 22 + sway * (length / 178.0) * (0.65 + 0.35 * flutter)
+        tip_y = root_y - length
+        bend_x = root_x + lean * 11 + sway * 0.35 * (length / 178.0)
+        bend_y = root_y - length * 0.55
+        points = []
+        for step in range(7):
+            t = step / 6
+            x = (1 - t) ** 2 * root_x + 2 * (1 - t) * t * bend_x + t ** 2 * tip_x
+            y = (1 - t) ** 2 * root_y + 2 * (1 - t) * t * bend_y + t ** 2 * tip_y
+            points.append((x, y))
+        tone = int(rng.uniform(34, 86) + (root_y / height) * 22)
+        colour = (int(tone * 0.82) + 12, tone + 18, int(tone * 0.5), 235)
+        draw.line(points, fill=colour, width=2 if length < 120 else 3, joint="curve")
+        if index % 4 == 0:
+            head_x, head_y = points[-1]
+            draw.ellipse((head_x - 2, head_y - 5, head_x + 2, head_y + 2),
+                         fill=(int(tone * 0.9) + 18, tone + 26, int(tone * 0.55), 225))
+    return Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+
+
 def camera_processing(image, rng, light, dirty=False):
     px = np.asarray(image, dtype=np.float32)
     height, width = px.shape[:2]
@@ -190,9 +231,11 @@ def camera_processing(image, rng, light, dirty=False):
     return Image.fromarray(np.uint8(np.clip(px, 0, 255)))
 
 
-def demo_image(background, *, seed, light, at, position=None, flagged=False, missing=False):
+def demo_image(background, *, seed, light, at, position=None, flagged=False, missing=False, wind=0.0):
     rng = np.random.default_rng(seed)
     photo = background.copy() if position is None else observe_animal(background, rng, position, "fox")
+    if wind:
+        photo = wind_grass(photo, seed, wind)
     view = camera_processing(photo, rng, light, dirty=flagged)
     if missing:
         view = view.convert("RGBA")

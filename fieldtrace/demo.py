@@ -20,24 +20,34 @@ STATIONS = (
 
 def seeded_catalog():
     alders = [
-        (0, "day-color", None, False, False),
-        (9, "day-color", (356, 388, 184, False), False, False),
-        (14, "day-color", (421, 392, 187, False), False, False),
-        (20, "day-color", (495, 386, 182, False), False, False),
-        (251, "day-color", None, True, False),
-        (256, "day-color", None, False, False),
-        (48612, "night-ir", None, False, False),
-        (48617, "night-ir", (456, 379, 186, True), False, False),
-        (48622, "night-ir", (390, 380, 178, True), False, True),
+        (0, "day-color", None, False, False, 0.0),
+        (9, "day-color", (356, 388, 184, False), False, False, 0.0),
+        (14, "day-color", (421, 392, 187, False), False, False, 0.0),
+        (20, "day-color", (495, 386, 182, False), False, False, 0.0),
+        (251, "day-color", None, True, False, 0.0),
+        (256, "day-color", None, False, False, 0.0),
+        (48612, "night-ir", None, False, False, 0.0),
+        (48617, "night-ir", (456, 379, 186, True), False, False, 0.0),
+        (48622, "night-ir", (390, 380, 178, True), False, True, 0.0),
+        # Wind-blown empty scenes: the left grass tussock sways, nothing crosses the trail.
+        (7200, "day-color", None, False, False, 0.15),
+        (7230, "day-color", None, False, False, 0.62),
+        (7265, "day-color", None, False, False, 0.38),
+        (7300, "day-color", None, False, False, 0.85),
+        # A small fox enters from the left tussock, so half its outline overlaps moving grass.
+        (7342, "day-color", (158, 402, 196, False), False, False, 0.47),
     ]
     ridges = [
-        (1320, "day-color", None, False, False),
-        (1325, "day-color", (382, 370, 140, False), False, False),
-        (1330, "day-color", (439, 373, 142, False), False, False),
-        (1351, "day-color", (505, 375, 146, False), False, False),
-        (51081, "night-ir", None, False, False),
-        (51104, "night-ir", (506, 376, 174, False), False, False),
-        (51110, "night-ir", None, True, False),
+        (1320, "day-color", None, False, False, 0.0),
+        (1325, "day-color", (382, 370, 140, False), False, False, 0.0),
+        (1330, "day-color", (439, 373, 142, False), False, False, 0.0),
+        (1351, "day-color", (505, 375, 146, False), False, False, 0.0),
+        (51081, "night-ir", None, False, False, 0.0),
+        (51104, "night-ir", (506, 376, 174, False), False, False, 0.0),
+        (51110, "night-ir", None, True, False, 0.0),
+        (8400, "day-color", None, False, False, 0.22),
+        (8440, "day-color", None, False, False, 0.71),
+        (8480, "day-color", None, False, False, 0.44),
     ]
     return [alders, ridges]
 
@@ -58,10 +68,10 @@ def deployment_fields(station, code):
 
 def observations(db, deployment, background, data, seed, code):
     frames, metadata = [], []
-    for i, (seconds, lighting, position, flag, missing) in enumerate(data, 1):
+    for i, (seconds, lighting, position, flag, missing, wind) in enumerate(data, 1):
         stamp = INITIAL_DATE + timedelta(seconds=seconds)
         intake = demo_image(background, seed=seed * 100 + i, light=lighting, at=stamp,
-                            position=position, flagged=flag, missing=missing)
+                            position=position, flagged=flag, missing=missing, wind=wind)
         frame, _ = register_photo(
             db, deployment, f"{code}_{i:03}." + ("png" if missing else "jpg"), decode(intake),
             {"illumination": lighting, "override": stamp.isoformat(timespec="seconds"),
@@ -70,7 +80,8 @@ def observations(db, deployment, background, data, seed, code):
         evidence_review = {
             "review": "seen" if position is not None else "unusable" if flag else "empty",
             "taxa": ["fox"] if position is not None else [],
-            "review_note": "Synthetic annotated reading." if not flag else "Veiling flare obscures the left side.",
+            "review_note": ("Synthetic annotated reading." if not flag
+                            else "Veiling flare obscures the left side."),
             "reviewed_at": stamp.isoformat(timespec="seconds"),
         }
         if i not in (3, 7):
@@ -81,10 +92,13 @@ def observations(db, deployment, background, data, seed, code):
             poly = photo_box(x + width * 0.12, y + width * 0.12, width * .83, width * .35, frame["extent"])
             db.append("marks", {
                 "name": TAXA["fox"] + " position", "kind": "animal", "frame_id": frame["id"],
-                "polygon": poly, "taxon": "fox", "certainty": "observed", "note": "Synthetic trace.",
+                "polygon": poly, "taxon": "fox", "certainty": "observed",
+                "note": "Synthetic trace; the animal partly overlaps wind-blown grass." if wind
+                        else "Synthetic trace.",
             }, action="synthetic outline entered")
         frames.append(frame)
-        metadata.append({"position": position, "time": stamp.isoformat(timespec="seconds"), "flags": flag})
+        metadata.append({"position": position, "time": stamp.isoformat(timespec="seconds"),
+                         "flags": flag, "wind": wind})
     return frames, metadata
 
 

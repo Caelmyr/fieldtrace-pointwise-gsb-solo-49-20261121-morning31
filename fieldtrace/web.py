@@ -8,7 +8,7 @@ from functools import wraps
 from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
-from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
+from . import activity, alignment, baseline, catalog, effort, events, evidence, geometry, identity
 from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
 from .config import (
     DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
@@ -153,6 +153,23 @@ def register_inspections(api, store, work):
     @work
     def motion(key):
         return inspection.save_motion(store, identifier(key), body()), 201
+
+    @api.post("/api/frames/<key>/baseline/preview")
+    @work
+    def baseline_preview(key):
+        report, _ = baseline.preview_baseline(store, identifier(key), body())
+        return {"report": report}
+
+    @api.post("/api/frames/<key>/baseline/preview.png")
+    @work
+    def baseline_preview_image(key):
+        _, view = baseline.preview_baseline(store, identifier(key), body())
+        return png(view)
+
+    @api.post("/api/frames/<key>/baseline")
+    @work
+    def baseline_save(key):
+        return baseline.save_baseline(store, identifier(key), body()), 201
 
     @api.post("/api/frames/<key>/profile")
     @work

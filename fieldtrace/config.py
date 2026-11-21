@@ -39,6 +39,7 @@ MEDIA_TYPES = {
     "thumbnail": "image/jpeg",
     "quality": "image/png",
     "motion": "image/png",
+    "baseline": "image/png",
     "contact": "image/png",
     "guide": "image/png",
     "packet": "application/zip",

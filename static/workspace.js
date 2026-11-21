@@ -8,7 +8,7 @@ const FULL= [0,0,1,1];
 const DEFAULT_PATCH=[.31,.57,.34,.24];
 const boxText=(box)=>JSON.stringify(box);
 const thumbnails=(name,records)=>h("div",{class:"actions"},records.map(f=>recordLink(f.name,"frame",f.id)));
-const reportAsset=(kind)=>["motion","quality"].includes(kind)?kind:"guide";
+const reportAsset=(kind)=>["motion","quality","baseline"].includes(kind)?kind:"guide";
 const normalBox=()=>field("Source window [x,y,width,height]","box",boxText(DEFAULT_PATCH),{wide:true,help:"Enter normalized source coordinates."});
 
 function recordModal(item){
@@ -23,10 +23,24 @@ function recordModal(item){
     ["Dominant direction",report.orientation_deg!=null?`${num(report.orientation_deg)}°`:null],
     ["Jointly visible samples",report.support?.joint],
   ].filter(([,v])=>v!==null&&v!==undefined);
+  const baseline=item.kind==="baseline"?[
+    h("h3",null,"Empty-scene baseline"),
+    definition([
+      ["References used",`${report.usable_reference_count} of ${report.reference_count} selected photo(s)`],
+      ["Recurrent change zones",report.recurrent_change?.zone_count],
+      ["Recurrent change area",pct(report.recurrent_change?.fraction)],
+      ["Unmeasured pixels",report.unmeasured_pixels],
+      ["New content candidates",report.review_candidates?.length],
+      ["Suppressed as vegetation/edge",report.suppressed_candidates?.length],
+    ]),
+    report.warnings?.length?h("div",{class:"stacked"},report.warnings.map(w=>h("p",{class:"empty"},w))):null,
+    table(["Candidate","Area px","Median change","Outside grass","Note"],
+      (report.review_candidates||[]).map((x)=>[x.index,x.area_px,num(x.median_change,3),pct(x.outside_fraction),x.note])),
+  ]:[];
   showModal(item.name,[h("div",{class:"full stacked"},
     img(file(item.id,reportAsset(item.kind)),`${item.kind} inspection result`),
-    definition(summary),report.categories&&table(["Visibility category","Pixel count"],Object.entries(report.categories)),
-    report.review_candidates?.length>0&&table(["Candidate","Area","Median change"],report.review_candidates.map((x,i)=>[i+1,x.area_px,num(x.median_change,3)])),
+    definition(summary),...baseline,report.categories&&table(["Visibility category","Pixel count"],Object.entries(report.categories)),
+    report.review_candidates?.length>0&&item.kind!=="baseline"&&table(["Candidate","Area","Median change"],report.review_candidates.map((x,i)=>[i+1,x.area_px,num(x.median_change,3)])),
     detail("Complete inspection evidence",report))],()=>true,{confirm:"Done"});
 }
 async function finishRecord(item,refresh){
@@ -89,7 +103,7 @@ async function comparisonDialog(frame,refresh,mode){
     {name:"Far right",before:[.70,.56],after:[.70,.56]},
     {name:"Near marker",before:[.49,.79],after:[.49,.79]}];
   const extra=mode==="motion"?[
-    field("Minimum local change","threshold",.085,{type:"number",step:.005,min:.01,max:.4}),
+    field("Minimum local change","threshold",.085,{type:"number",step:"any",min:.01,max:.4}),
     field("Smallest candidate area","min_area",60,{type:"number",min:8,max:4000}),
   ]:mode==="placement"?[
     field("Matching landmarks","anchors",JSON.stringify(anchors,null,2),{type:"area",wide:true}),
@@ -105,6 +119,85 @@ async function comparisonDialog(frame,refresh,mode){
     if(mode==="window-compare")values.box=jsonField(values,"box",null);
     const result=await send(`${PREFIX}/${frame.id}/${mode}`,values);await finishRecord(result,refresh);
   },{confirm:"Inspect and save"});
+}
+function baselineDialog(frame,refresh){
+  (async()=>{
+    const all=await api(`/api/frames?limit=200&deployment_id=${frame.deployment_id}`);
+    const candidates=all.frames.filter(f=>f.id!==frame.id&&f.extent.join()===frame.extent.join()&&
+      f.illumination===frame.illumination);
+    if(!candidates.length){notice("No same-lighting photos from this camera position to use as empty-scene references.");return;}
+    const chosen=new Set(candidates.filter(f=>f.review==="empty").map(f=>f.id));
+    const previewBox=h("div",{class:"full"});
+    let objectURL=null;
+    const settings=()=>({
+      threshold:Number(form.elements.threshold.value),
+      recurrent_threshold:Number(form.elements.recurrent_threshold.value),
+      min_area:Number(form.elements.min_area.value),
+      min_coverage:Number(form.elements.min_coverage.value),
+      max_contrast_shift:Number(form.elements.max_contrast_shift.value),
+      references:[...chosen],
+    });
+    const legend=h("legend",null,"");
+    const syncLegend=()=>{legend.textContent=`Empty-scene reference photos (${chosen.size} selected, up to 12)`;};
+    const dialog=showModal("Empty-scene baseline against moving vegetation",[
+      h("p",{class:"muted full"},"Pick several clear empty photos from this exact camera position. Areas that change across them (wind-blown grass, light flicker) are marked as recurrent change and kept visible, while only genuinely new contours outside those areas are raised for review. One photo is accepted as a simple one-photo difference."),
+      field("Record title","name","Empty-scene baseline difference",{required:true,wide:true}),
+      h("fieldset",{class:"full"},legend,
+        h("div",{class:"actions"},
+          button("Select photos marked empty",()=>{
+            chosen.clear();candidates.filter(f=>f.review==="empty").forEach(f=>chosen.add(f.id));syncChecks();}),
+          button("Clear selection",()=>{chosen.clear();syncChecks();})),
+        h("div",{class:"table-box"},h("table",null,h("tbody",null,candidates.map(f=>h("tr",null,
+          h("td",null,h("label",{class:"check"},h("input",{type:"checkbox",checked:chosen.has(f.id),
+            onchange:e=>{e.target.checked?chosen.add(f.id):chosen.delete(f.id);syncLegend();}}),f.name)),
+          h("td",null,stamp(f)),h("td",null,human(lookups.review,f.review)),
+          h("td",null,human(lookups.lighting,f.illumination)))))))),
+      field("Minimum local change","threshold",.085,{type:"number",step:"any",min:.01,max:.4}),
+      field("Recurrent change (wind) threshold","recurrent_threshold",.045,{type:"number",step:"any",min:.008,max:.3,
+        help:"Lower values mark more swaying vegetation as recurrent change."}),
+      field("Smallest candidate area (px)","min_area",60,{type:"number",min:8,max:4000}),
+      field("Minimum reference coverage","min_coverage",.25,{type:"number",step:"any",min:.2,max:1,
+        help:"Pixels covered by fewer references than this are reported as unmeasured."}),
+      field("Max global brightness shift","max_contrast_shift",.18,{type:"number",step:"any",min:.015,max:.5}),
+      button("Preview baseline",async()=>{
+        const body=settings();
+        if(!body.references.length)throw new Error("Select at least one empty-scene reference photo.");
+        const [report,blob]=await Promise.all([
+          send(`${PREFIX}/${frame.id}/baseline/preview`,body),
+          api(`${PREFIX}/${frame.id}/baseline/preview.png`,{method:"POST",json:body}),
+        ]);
+        if(objectURL)URL.revokeObjectURL(objectURL);
+        objectURL=URL.createObjectURL(blob);
+        const r=report.report;
+        previewBox.replaceChildren(
+          img(objectURL,"Empty-scene baseline preview"),
+          definition([
+            ["Comparable references",`${r.usable_reference_count} of ${r.reference_count}`],
+            ["Recurrent change zones",r.recurrent_change.zone_count],
+            ["New content candidates",r.review_candidates.length],
+            ["Suppressed vegetation/edge blobs",r.suppressed_candidates.length],
+            ["Unmeasured pixels",r.unmeasured_pixels],
+          ]),
+          r.warnings.length?h("div",{class:"stacked"},r.warnings.map(w=>h("p",{class:"empty"},w))):null,
+        );
+      }),
+      previewBox,
+    ],async(_,values)=>{
+      const body=settings();
+      if(!body.references.length)throw new Error("Select at least one empty-scene reference photo.");
+      body.name=values.name;
+      const item=await send(`${PREFIX}/${frame.id}/baseline`,body);
+      await finishRecord(item,refresh);
+    },{confirm:"Save baseline inspection"});
+    const form=dialog.form;
+    const syncChecks=()=>{
+      form.querySelectorAll("tbody input[type=checkbox]").forEach((box,index)=>{
+        box.checked=chosen.has(candidates[index].id);
+      });
+      syncLegend();
+    };
+    syncLegend();
+  })().catch(exc=>notice(exc.message));
 }
 function localTrace(frame,refresh,points=null){
   showModal("Measure image profile",[
@@ -278,6 +371,7 @@ export async function frameWorkbench(id,tools){
       pane("Image inspections",h("div",{class:"actions"},
         button("Map image quality",()=>qualityDialog(frame,refresh)),
         button("Find movement candidates",()=>comparisonDialog(frame,refresh,"motion")),
+        button("Empty-scene baseline (wind grass)",()=>baselineDialog(frame,refresh)),
         button("Compare camera windows",()=>comparisonDialog(frame,refresh,"window-compare")),
         button("Audit camera placement",()=>comparisonDialog(frame,refresh,"placement")),
         button("Measure image profile",()=>localTrace(frame,refresh)),
