@@ -78,6 +78,26 @@ def subtract_intervals(span, holes):
     return intervals
 
 
+def intersect_intervals(first, second):
+    left = merged_intervals(first)
+    right = merged_intervals(second)
+    answer = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        start, end = max(left[i][0], right[j][0]), min(left[i][1], right[j][1])
+        if start < end:
+            answer.append((start, end))
+        if left[i][1] < right[j][1]:
+            i += 1
+        else:
+            j += 1
+    return answer
+
+
+def difference_intervals(base, holes):
+    return [part for span in merged_intervals(base) for part in subtract_intervals(span, holes)]
+
+
 def measure_hours(intervals):
     return sum((b - a for a, b in intervals), ZERO).total_seconds() / 3600
 

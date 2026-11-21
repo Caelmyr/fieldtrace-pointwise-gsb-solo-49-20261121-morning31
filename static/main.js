@@ -368,36 +368,60 @@ function dates(){
 }
 function surveyFields(cat,type,training){
   const days=training?["2026-09-16","2026-09-20"]:dates();
+  const paired=type==="pairing";
   return [
-    field("Report title","name",type==="activity"?"Camera activity by local clock":"Survey effort",{required:true}),
+    field("Report title","name",type==="activity"?"Camera activity by local clock":paired?"Paired survey effort":"Survey effort",{required:true}),
     pick("Animal filter","taxon",lookups.taxa,"","Any animal"),
     field("First day","first_day",days[0],{type:"date",required:true}),
     field("Last day","last_day",days[1],{type:"date",required:true}),
-    pick("Survey window","mode",[["active","All active camera hours"],["day-window","Daytime window"],["night-window","Night window"]],"active"),
+    ...(paired?[]:[pick("Survey window","mode",[["active","All active camera hours"],["day-window","Daytime window"],["night-window","Night window"]],"active")]),
     type==="activity"?pick("Bucket duration","bucket_minutes",[["30","30 minutes"],["60","One hour"],["120","Two hours"]],"60"):
       field("Day begins at hour","day_from",6,{type:"number",min:0,max:22}),
     field("Day ends at hour","day_to",18,{type:"number",min:1,max:23}),
-    choices("Survey stations","stations",stationChoices(cat),cat.stations.map(x=>x.id)),
+    choices("Survey stations","stations",stationChoices(cat),paired?cat.stations.slice(0,2).map(x=>x.id):cat.stations.map(x=>x.id)),
   ];
 }
 function saveSurvey(cat,type,training){
+  if(type==="pairing"&&cat.stations.length<2){notice("Add two stations to compare paired effort.");return;}
   if(!cat.stations.length){notice("Add at least one station.");return;}
   const preview=h("div",{class:"full"});
   const get=(form)=>({...data(form),stations:new FormData(form).getAll("stations")});
-  const dialog=showModal(type==="activity"?"Build clock activity chart":"Summarize surveillance effort",[
+  const dialog=showModal(type==="activity"?"Build clock activity chart":type==="pairing"?"Compare hours recorded at both stations":"Summarize surveillance effort",[
     ...surveyFields(cat,type,training),
     button("Preview report",async()=>{
-      const r=await send(`/api/${type}`,get(dialog.form));
+      const r=await send(`/api/${type==="pairing"?"pairing":type}`,get(dialog.form));
       preview.replaceChildren(surveyTable(r,type));
     }),preview,
   ],async(form)=>{
-    const result=await send(`/api/${type}/save`,get(form));
+    const result=await send(`/api/${type==="pairing"?"pairing":type}/save`,get(form));
     notice("Survey report saved.");route("report",result.id);
   },{confirm:"Save report"});
+}
+function pairingTable(r){
+  const blocks=[];
+  for(const section of r.classes){
+    blocks.push(h("h3",null,`${section.label} · ${section.window}`),
+      table(["Station","Paired hours","Seen","Not seen","Pending","Encounters per 24 h","Hours without a partner"],
+        section.stations.map(item=>[item.name,num(item.paired_hours),item.seen,item.not_seen,item.pending,
+          item.rate_per_24h==null?"— (no paired hours)":num(item.rate_per_24h),num(item.unpaired_hours)])));
+    for(const item of section.stations){
+      const other=section.stations.find(other=>other.station_id!==item.station_id);
+      if(!item.unpaired_blocks.length)continue;
+      blocks.push(h("p",{class:"muted"},`${item.name} alone: hours recorded when ${other.name} was not available in this window. Shown beside the comparison; not treated as absence at ${other.name}.`),
+        table(["From","To","Hours","Partner unavailable","Seen","Not seen","Pending"],
+          item.unpaired_blocks.map(b=>[b.start_local,b.end_local,num(b.hours),
+            b.partner_unavailable.length?b.partner_unavailable.join(", "):"—",b.seen,b.not_seen,b.pending])),
+        item.unpaired_blocks_truncated&&h("p",{class:"muted"},`Only the first ${item.unpaired_blocks.length} separate blocks are listed.`),
+        item.unpaired_short_gap_hours>0&&h("p",{class:"muted"},
+          `A further ${num(item.unpaired_short_gap_hours)} h in gaps shorter than 15 minutes is included in the hours above but not listed as blocks.`));
+    }
+  }
+  return h("div",{class:"stacked"},...blocks);
 }
 function surveyTable(r,type){
   if(type==="activity")return table(["Station","Local time zone","Active hours","Positive events","Activity centre in minutes"],
     r.stations.map(item=>[item.name,item.timezone,num(item.hours),item.activity.positive_events,num(item.activity.centre_minutes)]));
+  if(type==="pairing")return pairingTable(r);
   return table(["Station","Active hours","Reviewed positives","Pending","Encounters per 24 hours"],
     r.stations.map(item=>[item.station_name,num(item.hours_active),item.outcomes.seen||0,item.outcomes.pending||0,num(item.rate_per_24h)]));
 }
@@ -425,6 +449,7 @@ async function surveys(){
   const [out,lists,cat,home]=await Promise.all([api("/api/reports"),api("/api/samples"),catalog(),api("/api/home")]);
   return [title("Survey reports","Compare reviewed encounters to active camera time and retain reproducible review samples.",
     button("Summarize effort",()=>saveSurvey(cat,"effort",home.training),"primary"),
+    button("Compare paired effort",()=>saveSurvey(cat,"pairing",home.training)),
     button("Clock activity chart",()=>saveSurvey(cat,"activity",home.training)),
     button("Build review sample",()=>sampleDialog(cat))),
     h("div",{class:"split"},pane("Saved reports",out.reports.length?out.reports.map(r=>row(r.name,r.kind,
@@ -438,13 +463,16 @@ async function oneReport(key){
   const supporting=record.kind==="sequence"?
     pane("Sequence sources",table(["Photo","Trigger index","Review","Time"],report.metadata.map(r=>[
       recordLink(r.name,"frame",r.frame_id),r.sequence_index,r.review,r.time.utc]))):null;
+  const paired=record.kind==="pairing"?
+    pane("Paired comparison",h("p",{class:"muted"},report.note),pairingTable(report),
+      detail("Report settings",report.settings)):null;
   return [title(record.name,record.kind==="sequence"?"Saved camera event strip":report.note||"Saved survey report",
     link("Download CSV",`/api/reports/${key}.csv`,"download"),link("All reports","#surveys","download")),
     record.assets.some(x=>x.label==="guide")&&pane(null,img(file(key,"guide"),`Saved ${record.kind} chart`)),
-    record.kind==="sequence"?supporting:pane("Station results",surveyTable(report,record.kind),
-      ...report.stations.map(station=>detail(station.station_name||station.name,
+    paired||(record.kind==="sequence"?supporting:pane("Station results",surveyTable(report,record.kind),
+      ...(report.stations||[]).map(station=>detail(station.station_name||station.name,
         record.kind==="activity"?station.entries:station.days))),
-    detail("Report settings",report.settings||report.box)];
+      detail("Report settings",report.settings||report.box))];
 }
 async function oneSample(key){
   const list=await api(`/api/records/samples/${key}`);

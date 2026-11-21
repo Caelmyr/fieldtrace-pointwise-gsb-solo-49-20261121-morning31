@@ -9,7 +9,7 @@ from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
-from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
+from . import inspection, journal, pairs, pairing, probe, profiles, reconcile, sampling, sequences, texture
 from .config import (
     DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
     POSES, REVIEW_STATES, STATIC, TAXA,
@@ -319,6 +319,14 @@ def register_reports(api, store, work):
     @work
     def save_activity():
         return activity.activity_chart(store, body(), save=True), 201
+
+    @api.post("/api/pairing")
+    def pairing_preview():
+        return pairing.paired_effort(store, body())
+
+    @api.post("/api/pairing/save")
+    def save_pairing():
+        return pairing.paired_effort(store, body(), save=True), 201
 
     @api.get("/api/register.csv")
     def frame_register():

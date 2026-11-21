@@ -89,6 +89,31 @@ def report_rows(report, kind):
                 notes.append({"station": station["name"], "time_zone": station["timezone"]} | window)
         columns = [(k, k) for k in ("station", "time_zone", "start", "end", "hours",
                                     "seen", "not_seen", "pending", "rate_per_24h")]
+    elif kind == "pairing":
+        for section in report["classes"]:
+            for station in section["stations"]:
+                notes.append({
+                    "light": section["label"], "window": section["window"],
+                    "station": station["name"], "time_zone": station["timezone"], "row_kind": "paired",
+                    "paired_hours": station["paired_hours"], "seen": station["seen"],
+                    "not_seen": station["not_seen"], "pending": station["pending"],
+                    "rate_per_24h": station["rate_per_24h"], "unpaired_hours": station["unpaired_hours"],
+                })
+                for block in station["unpaired_blocks"]:
+                    notes.append({
+                        "light": section["label"], "window": section["window"],
+                        "station": station["name"], "time_zone": station["timezone"], "row_kind": "unpaired",
+                        "unpaired_hours": station["unpaired_hours"],
+                        "block_start_local": block["start_local"], "block_end_local": block["end_local"],
+                        "block_hours": block["hours"], "block_seen": block["seen"],
+                        "block_not_seen": block["not_seen"], "block_pending": block["pending"],
+                        "block_partner_unavailable": ", ".join(block["partner_unavailable"]),
+                    })
+        columns = [(k, k) for k in ("light", "window", "station", "time_zone", "row_kind",
+                                    "paired_hours", "seen", "not_seen", "pending", "rate_per_24h",
+                                    "unpaired_hours", "block_start_local", "block_end_local", "block_hours",
+                                    "block_seen", "block_not_seen", "block_pending",
+                                    "block_partner_unavailable")]
     elif kind == "sequence":
         notes = [
             {"name": row["name"], "frame": row["frame_id"], "order": row["sequence_index"],
