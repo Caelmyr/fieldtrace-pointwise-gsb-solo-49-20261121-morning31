@@ -21,6 +21,8 @@ MAX_EVENT_FRAMES = 90
 MAX_WITNESSES = 80
 MAX_MARKS_PER_FRAME = 36
 MAX_POLYGON_POINTS = 60
+MAX_MATCH_REGIONS = 4
+MAX_MATCH_WITNESSES = 240
 MAX_SEARCH_FRAMES = 1800
 MAX_CONTACT_PAGES = 12
 MAX_PACKET_FRAMES = 32
@@ -102,6 +104,15 @@ POSES = {
     "unknown": "Unknown view",
 }
 CERTAINTIES = {"observed", "probable", "uncertain"}
+MARKING_REGIONS = {
+    "ear": "Ear or ear notch",
+    "flank": "Flank or back pattern",
+    "tail": "Tail or tail tip",
+    "face": "Face or muzzle",
+    "other": "Other marking",
+    "unspecified": "Area not labelled",
+}
+COMPARABLE_REGIONS = tuple(name for name in MARKING_REGIONS if name != "unspecified")
 OUTAGES = {
     "power": "Power loss",
     "obstructed": "Camera obstructed",

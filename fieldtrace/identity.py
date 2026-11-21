@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from .catalog import revision
-from .config import CERTAINTIES, POSES, TAXA
+from .config import CERTAINTIES, MARKING_REGIONS, POSES, TAXA
 from .contracts import Limit, SurveyError, identifier, integer, option, rectangle, word
 from .images import fetch_work, image_bytes, intensities, label, mark_union, normalized_crop, quality_edges, show_support
 
@@ -78,6 +78,7 @@ def save_portrait(store, identity_id, form):
     frame_id = identifier(form.get("frame"), "frame")
     selected = rectangle(form.get("box"))
     pose = option(form.get("pose"), "pose", POSES, default="unknown")
+    region = option(form.get("region"), "marking region", MARKING_REGIONS, default="unspecified")
     with store.use() as db:
         individual = db.one("identities", identity_id)
         frame = db.one("frames", frame_id)
@@ -91,6 +92,7 @@ def save_portrait(store, identity_id, form):
     locked = {
         "name": word(form.get("name"), "reference title", default=f"{POSES[pose]} · {frame['name'][:40]}"),
         "identity_id": identity_id, "frame_id": frame["id"], "pose": pose, "box": selected,
+        "region": region,
         "certainty": option(form.get("certainty"), "certainty", CERTAINTIES, default="probable"),
         "note": word(form.get("note"), "witness note", max_length=1600, default="", multiline=True),
         "source_digest": frame["digest"], "source_extent": frame["extent"],
@@ -98,7 +100,7 @@ def save_portrait(store, identity_id, form):
         "illumination": frame["illumination"], "witness_time": frame["stamp_utc"],
         "quality": quality, "mask_versions": {item["id"]: item["version"] for item in marks},
     }
-    view = pose_panel(crop, support, description=POSES[pose])
+    view = pose_panel(crop, support, description=f"{POSES[pose]} · {MARKING_REGIONS[region]}")
     with store.use(write=True) as db:
         if db.count("portraits", equal={"identity_id": identity_id}) >= 36:
             raise Limit("This individual already has the maximum number of reference crops.")

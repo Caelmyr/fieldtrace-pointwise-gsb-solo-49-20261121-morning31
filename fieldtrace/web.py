@@ -9,10 +9,10 @@ from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
-from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
+from . import inspection, journal, matching, pairs, probe, profiles, reconcile, sampling, sequences, texture
 from .config import (
-    DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
-    POSES, REVIEW_STATES, STATIC, TAXA,
+    DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MARKING_REGIONS, MAX_BATCH_BYTES,
+    OUTAGES, POSES, REVIEW_STATES, STATIC, TAXA,
 )
 from .contracts import Missing, SurveyError, identifier, need_object
 from .demo import create_demo
@@ -46,7 +46,7 @@ def register_catalog(api, store, work):
         return {
             "habitats": HABITATS, "deployments": DEPLOYMENT_STATES, "lighting": ILLUMINATIONS,
             "review": REVIEW_STATES, "marks": MARK_KINDS, "taxa": TAXA, "poses": POSES,
-            "outages": OUTAGES, "strata": sampling.STRATA,
+            "outages": OUTAGES, "strata": sampling.STRATA, "regions": MARKING_REGIONS,
         }
 
     @api.get("/api/stations")
@@ -250,6 +250,38 @@ def register_inspections(api, store, work):
     @api.get("/api/portraits")
     def portrait_directory():
         return identity.query_portraits(store, request.args)
+
+    @api.post("/api/frames/<key>/witness-search")
+    @work
+    def search_witnesses(key):
+        return matching.search(store, identifier(key), body())
+
+    @api.post("/api/frames/<key>/witness-search/save")
+    @work
+    def save_witness_search(key):
+        return matching.save_search(store, identifier(key), body()), 201
+
+    @api.get("/api/glances/<key>/marked.png")
+    @work
+    def glance_marked(key):
+        with store.use() as db:
+            asset = db.asset(identifier(key), "guide")
+        return send_file(store.blobs.path(asset["digest"]), mimetype=asset["media_type"],
+                         etag=asset["digest"], conditional=True)
+
+    @api.post("/api/frames/<key>/witness-marked.png")
+    @work
+    def witness_marks(key):
+        return png(matching.sketch(store, identifier(key), body()))
+
+    @api.get("/api/witness-compare.png")
+    @work
+    def witness_compare():
+        return png(matching.comparison(store, identifier(request.args.get("frame"), "frame"), request.args))
+
+    @api.put("/api/portraits/<key>")
+    def relabel_portrait(key):
+        return matching.relabel(store, identifier(key), body())
 
     @api.post("/api/frames/<key>/crop-preview")
     @work

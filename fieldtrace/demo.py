@@ -125,27 +125,35 @@ def ground_model(db, frame, deployment):
     }, action="training ground plane fitted")
 
 
-def witness(db, frame):
-    subject = db.append("identities", {
-        "name":"Willow", "taxon":"fox", "status":"provisional",
-        "features":"Fictional reference. Look at the shaded flank and tail edge.",
-    })
+def add_witness(db, frame, subject, *, name, pose, region, box):
     photo = fetch_work(db, frame["id"])
-    x, y, w, h = 350, 398, 178, 72
+    x, y, w, h = box
     sx, sy = frame["extent"]
-    tile = marked_preview(photo.crop((x, y, x+w,y+h)), [])
+    tile = marked_preview(photo.crop((x, y, x+w, y+h)), [])
     key = db.append("portraits", {
-        "identity_id":subject["id"], "frame_id":frame["id"], "name":"Daytime left-flank witness",
-        "pose":"left", "box":[x/sx,y/sy,w/sx,h/sy], "certainty":"probable",
-        "note":"Synthetic face side and body marking.",
-        "source_digest":frame["digest"], "source_extent":frame["extent"],
-        "source_version":frame["version"], "identity_version":subject["version"],
-        "illumination":frame["illumination"], "witness_time":frame["stamp_utc"],
-        "quality":{"bounds_px":[x,y,x+w,y+h],"width_px":w,"height_px":h,
-                   "supported_fraction":1,"clear_fraction":1,"edge_detail":None},
-        "mask_versions":{},
+        "identity_id": subject["id"], "frame_id": frame["id"], "name": name,
+        "pose": pose, "region": region, "box": [x/sx, y/sy, w/sx, h/sy], "certainty": "probable",
+        "note": "Synthetic reference marking.",
+        "source_digest": frame["digest"], "source_extent": frame["extent"],
+        "source_version": frame["version"], "identity_version": subject["version"],
+        "illumination": frame["illumination"], "witness_time": frame["stamp_utc"],
+        "quality": {"bounds_px": [x, y, x+w, y+h], "width_px": w, "height_px": h,
+                    "supported_fraction": 1, "clear_fraction": 1, "edge_detail": None},
+        "mask_versions": {},
     })
     db.add_asset(key["id"], "guide", image_bytes(tile), "image/png")
+    return key
+
+
+def witness(db, frame):
+    subject = db.append("identities", {
+        "name": "Willow", "taxon": "fox", "status": "provisional",
+        "features": "Fictional reference. The left ear carries a notch and the left flank a pale streak.",
+    })
+    add_witness(db, frame, subject, name="Left ear notch", pose="left", region="ear",
+                box=(430, 386, 72, 40))
+    add_witness(db, frame, subject, name="Left flank pattern", pose="left", region="flank",
+                box=(350, 398, 178, 72))
     return subject
 
 

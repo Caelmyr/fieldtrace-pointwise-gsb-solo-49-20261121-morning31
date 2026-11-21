@@ -322,6 +322,7 @@ async function addPortrait(person,known=null){
   const dialog=showModal("Save a marking witness",[
     pick("Camera frame","frame",frames.map(x=>[x.id,x.name]),current?.id||frames[0].id),
     pick("Body view","pose",lookups.poses,"left"),field("Witness title","name",""),
+    pick("Which marking does this crop show?","region",Object.entries(lookups.regions||{}),"flank"),
     pick("Certainty","certainty",[["probable","Probable"],["observed","Observed"],["uncertain","Uncertain"]],"probable"),
     field("Marking crop [x,y,width,height]","box","[0.35,0.60,0.18,0.16]",{required:true,wide:true}),
     field("Witness note","note","",{wide:true,type:"area"}),
@@ -345,6 +346,12 @@ async function identities(){
 async function oneIdentity(key){
   const item=await api(`/api/identities/${key}`);
   const catalogue=await api("/api/portraits");
+  const relabel=(portrait)=>showModal("Label this witness area",[
+    pick("Marked area","region",Object.entries(lookups.regions||{}),portrait.region||"unspecified"),
+  ],async(_,values)=>{
+    await send(`/api/portraits/${portrait.id}`,{region:values.region,version:portrait.version},"PUT");
+    notice("Witness area labelled.");await refresh();
+  });
   const compareDialog=(left)=>showModal("Compare marking witnesses",[
     pick("Second witness","second",catalogue.portraits.filter(r=>r.id!==left.id).map(r=>[r.id,r.name]),"","Choose a witness"),
   ],async(_,values)=>{
@@ -352,13 +359,25 @@ async function oneIdentity(key){
     const view=img(`/api/portraits/compare.png?first=${left.id}&second=${values.second}`,"Comparison of two saved marking witnesses");
     setTimeout(()=>showModal("Marking comparison",[h("div",{class:"full"},view)],()=>true,{confirm:"Done"}),0);
   },{confirm:"Compare"});
+  const sideWitnesses=(pose)=>{
+    const group=item.portraits.filter(p=>p.pose===pose);
+    return group.length
+      ?h("div",{class:"grid cards"},group.map(p=>pane(p.name,img(file(p.id,"guide"),"Saved marking crop"),
+        definition([["Marked area",human(lookups.regions,p.region||"unspecified")],
+          ["Visible evidence",pct(p.quality.clear_fraction)],["Certainty",p.certainty]]),
+        h("div",{class:"actions"},recordLink("Open source photo","frame",p.frame_id),
+          button("Label area",()=>relabel(p)),
+          catalogue.portraits.length>1&&button("Compare",()=>compareDialog(p))))))
+      :empty(`No retained witness on the ${human(lookups.poses,pose).toLowerCase()} yet.`);
+  };
   return [title(item.name,`${human(lookups.taxa,item.taxon)} · ${item.status}`,
     button("Add marking witness",()=>addPortrait(item),"primary"),button("Edit individual",()=>identityForm(item))),
     item.features&&pane("Marking notes",h("p",null,item.features)),
-    h("div",{class:"grid cards"},item.portraits.map(p=>pane(p.name,img(file(p.id,"guide"),"Saved marking crop"),
-      definition([["Body view",human(lookups.poses,p.pose)],["Visible evidence",pct(p.quality.clear_fraction)],["Certainty",p.certainty]]),
-      h("div",{class:"actions"},recordLink("Open source photo","frame",p.frame_id),
-        catalogue.portraits.length>1&&button("Compare",()=>compareDialog(p)))))),
+    pane("Left flank witnesses",sideWitnesses("left")),
+    pane("Right flank witnesses",sideWitnesses("right")),
+    item.portraits.some(p=>!["left","right"].includes(p.pose))
+      &&pane("Other views",h("div",{class:"grid cards"},item.portraits.filter(p=>!["left","right"].includes(p.pose))
+        .map(p=>pane(p.name,img(file(p.id,"guide"),"Saved marking crop"),recordLink("Open source photo","frame",p.frame_id))))),
     !item.portraits.length&&empty("No saved marking witnesses.")];
 }
 

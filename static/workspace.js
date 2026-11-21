@@ -2,6 +2,7 @@ import {
   api,badge,button,check,data,definition,detail,empty,field,file,h,human,img,jsonField,link,list,
   lookups,notice,num,pane,pct,pick,q,recordLink,row,send,showModal,stamp,table,title,
 } from "./ui.js";
+import {savedSearchPanel,witnessPane} from "./witness.js";
 
 const PREFIX="/api/frames";
 const FULL= [0,0,1,1];
@@ -283,7 +284,8 @@ export async function frameWorkbench(id,tools){
         button("Measure image profile",()=>localTrace(frame,refresh)),
         button("Inspect marking pattern",()=>textureDialog(frame,refresh)),
         button("Add as identity witness",()=>identityChoice(frame,tools.addPortrait))),
-      ...frame.glances.map(item=>row(item.name,item.kind,button("Open",()=>recordModal(item))))),
+      ...frame.glances.filter(item=>item.kind!=="witness-search").map(item=>row(item.name,item.kind,button("Open",()=>recordModal(item))))),
+      h("div",{class:"stacked"},witnessPane(frame,refresh)),
       pane("Source outlines",frame.marks.length?frame.marks.map(x=>row(x.name,human(lookups.marks,x.kind),
         button("Edit",()=>createMark(frame,null,refresh,x)))):empty("Draw an outline using the camera image or enter its vertices."),
         button("Enter outline coordinates",()=>createMark(frame,[],refresh))),

@@ -310,9 +310,11 @@ class Access:
             for row in source
         ]
 
-    def asset(self, owner, label):
+    def asset(self, owner, label, *, optional=False):
         row = self.conn.execute("SELECT * FROM assets WHERE owner_id=? AND label=?", (owner, label)).fetchone()
         if row is None:
+            if optional:
+                return None
             raise Missing("image or report file")
         return dict(row)
 
