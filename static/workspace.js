@@ -8,10 +8,60 @@ const FULL= [0,0,1,1];
 const DEFAULT_PATCH=[.31,.57,.34,.24];
 const boxText=(box)=>JSON.stringify(box);
 const thumbnails=(name,records)=>h("div",{class:"actions"},records.map(f=>recordLink(f.name,"frame",f.id)));
-const reportAsset=(kind)=>["motion","quality"].includes(kind)?kind:"guide";
+const reportAsset=(kind)=>["motion","quality"].includes(kind)?kind:kind==="exposure-assist"?"assist":"guide";
 const normalBox=()=>field("Source window [x,y,width,height]","box",boxText(DEFAULT_PATCH),{wide:true,help:"Enter normalized source coordinates."});
 
+function tileAtPoint(report,event,element){
+  const r=element.getBoundingClientRect();
+  // object-fit: contain letterboxes the image inside its element box; map into the content box.
+  const scale=Math.min(r.width/report.extent[0],r.height/report.extent[1]);
+  const drawW=report.extent[0]*scale, drawH=report.extent[1]*scale;
+  const insetX=(r.width-drawW)/2, insetY=(r.height-drawH)/2;
+  const x=(event.clientX-r.left-insetX)/scale;
+  const y=(event.clientY-r.top-insetY)/scale;
+  if(x<0||y<0||x>=report.extent[0]||y>=report.extent[1])return null;
+  return report.tiles.find(t=>x>=t.box[0]&&x<t.box[0]+t.box[2]&&y>=t.box[1]&&y<t.box[1]+t.box[3]);
+}
+const tile_target_pct=(tile)=>(tile.target_readable_fraction??0)*100;
+function exposureRecordModal(item){
+  const report=item.report||{};
+  const summary=report.summary||{};
+  const tone=report.tone_match||{};
+  const tileRows=(report.tiles||[]).filter(t=>t.source!=="target").map(t=>[
+    `#${t.index}`,t.source,t.reason,`${Math.round(t.target_readable_fraction*100)}%`,
+    `${Math.round(t.reference_readable_fraction*100)}%`,t.conflict_px||"",
+  ]);
+  const conflictRows=(report.conflicts||[]).map((c,i)=>[
+    i+1,c.area_px,`${Math.round(c.centroid[0]*100)}%, ${Math.round(c.centroid[1]*100)}%`,
+    c.box.join(", "),
+  ]);
+  const assist=img(file(item.id,"assist"),"Exposure assist composite with conflict and unread tiles marked");
+  const readout=h("p",{class:"help"},"Click the assist image to identify which frame each tile was read from.");
+  assist.style.cursor="crosshair";
+  assist.addEventListener("click",event=>{
+    const tile=tileAtPoint(report,event,assist);
+    if(!tile)return;
+    readout.textContent=`Tile #${tile.index} · source: ${tile.source} · reason: ${tile.reason} · target readable ${Math.round(tile_target_pct(tile))} / reference readable ${Math.round(tile.reference_readable_fraction*100)}% · box ${tile.box.join(", ")}`;
+  });
+  const counts=summary.tiles_by_source||{};
+  showModal(item.name,[h("div",{class:"full stacked"},
+    assist,readout,
+    definition([
+      ["Comparison state",report.comparison_state],
+      ["Tiles from current frame",counts.target],["Tiles from reference frame",counts.reference],
+      ["Conflict tiles",counts.conflict],["Unread tiles",counts.unread],
+      ["Conflict components",summary.conflict_components],
+      ["Conflict fraction",summary.conflict_fraction_of_common!=null?pct(summary.conflict_fraction_of_common):null],
+      ["Jointly readable pixels",summary.jointly_readable_pixels],
+      ["Tone match scale",tone.scale],["Tone samples",tone.common_readable_pixels],
+    ]),
+    img(file(item.id,"provenance"),"Tile provenance map"),
+    conflictRows.length&&table(["#","Area px","Centroid","Box [x,y,w,h]"],conflictRows),
+    table(["Tile","Source","Reason","Target readable","Reference readable","Conflict px"],tileRows),
+    detail("Method and complete evidence",report))],()=>true,{confirm:"Done"});
+}
 function recordModal(item){
+  if(item.kind==="exposure-assist"){exposureRecordModal(item);return;}
   const report=item.report||{};
   const summary=[
     ["Operation",item.kind],["Image support",report.support?.fraction!=null?pct(report.support.fraction):null],
@@ -105,6 +155,29 @@ async function comparisonDialog(frame,refresh,mode){
     if(mode==="window-compare")values.box=jsonField(values,"box",null);
     const result=await send(`${PREFIX}/${frame.id}/${mode}`,values);await finishRecord(result,refresh);
   },{confirm:"Inspect and save"});
+}
+function exposureAssistDialog(frame,refresh){
+  api(`/api/frames?limit=160&deployment_id=${frame.deployment_id}`).then(all=>{
+    const candidates=all.frames.filter(f=>f.id!==frame.id&&f.extent.join()===frame.extent.join());
+    if(!candidates.length){notice("No same-framing photos in this camera deployment to pair with.");return;}
+    showModal("Build exposure assist view",[
+      field("Assist title","name","Exposure assist view",{required:true}),
+      pick("Reference photo (the other exposure)","reference",candidates.map(a=>[a.id,a.name]),candidates[0].id),
+      field("Readable shadow limit","shadows",.06,{type:"number",step:.005,min:.005,max:.35}),
+      field("Readable highlight limit","highlights",.97,{type:"number",step:.005,min:.65,max:1}),
+      field("Tile size (px)","tile_px",24,{type:"number",min:8,max:120}),
+      field("Minimum readable share per tile","readable_fraction",.5,{type:"number",step:.05,min:.2,max:.95}),
+      field("Outline edge threshold","edge_threshold",.07,{type:"number",step:.005,min:.02,max:.3}),
+      field("Smallest conflict area (px)","min_conflict_area",48,{type:"number",min:8,max:4000}),
+      field("Widespread conflict limit","conflict_area_limit",.25,{type:"number",step:.01,min:.03,max:.9}),
+      check("Apply ignore and obstruction marks","use_exclusions",true),
+      h("p",{class:"help full"},"Tiles are taken only from a frame that is independently readable. Outline disagreement is held out as a conflict instead of merged; areas clipped or unsupported in both stay unread."),
+    ],async(form,values)=>{
+      values.use_exclusions=form.elements.use_exclusions.checked;
+      const item=await send(`${PREFIX}/${frame.id}/exposure-assist`,values);
+      await finishRecord(item,refresh);
+    },{confirm:"Build assist view"});
+  });
 }
 function localTrace(frame,refresh,points=null){
   showModal("Measure image profile",[
@@ -277,6 +350,7 @@ export async function frameWorkbench(id,tools){
       h("aside",{class:"stacked"},detailsPanel(frame,tools),
       pane("Image inspections",h("div",{class:"actions"},
         button("Map image quality",()=>qualityDialog(frame,refresh)),
+        button("Exposure assist pair",()=>exposureAssistDialog(frame,refresh)),
         button("Find movement candidates",()=>comparisonDialog(frame,refresh,"motion")),
         button("Compare camera windows",()=>comparisonDialog(frame,refresh,"window-compare")),
         button("Audit camera placement",()=>comparisonDialog(frame,refresh,"placement")),

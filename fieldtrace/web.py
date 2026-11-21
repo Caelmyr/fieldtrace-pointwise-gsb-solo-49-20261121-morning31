@@ -8,7 +8,7 @@ from functools import wraps
 from flask import Flask, Response, jsonify, request, send_file
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
-from . import activity, alignment, catalog, effort, events, evidence, geometry, identity
+from . import activity, alignment, catalog, effort, events, evidence, exposure, geometry, identity
 from . import inspection, journal, pairs, probe, profiles, reconcile, sampling, sequences, texture
 from .config import (
     DATA, DEPLOYMENT_STATES, HABITATS, ILLUMINATIONS, MARK_KINDS, MAX_BATCH_BYTES, OUTAGES,
@@ -173,6 +173,11 @@ def register_inspections(api, store, work):
     @work
     def compare_window(key):
         return pairs.compare_photos(store, identifier(key), body()), 201
+
+    @api.post("/api/frames/<key>/exposure-assist")
+    @work
+    def exposure_assist(key):
+        return exposure.build_assist(store, identifier(key), body()), 201
 
     @api.post("/api/frames/<key>/detail-bands")
     @work

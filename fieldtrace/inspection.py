@@ -12,7 +12,7 @@ from .contracts import (
     Limit, SurveyError, flag, identifier, integer, need_object, number, rectangle, word,
 )
 from .images import (
-    background, display_tone, fetch_work, image_bytes, intensities, label, mark_union,
+    background, display_tone, fetch_work, font, image_bytes, intensities, label, mark_union,
     normalized_crop, quality_edges, readonly_array, show_support, support_geometry,
 )
 
@@ -168,14 +168,29 @@ def class_image(photo, tags, palette, *, support=None, opacity=0.48):
 
 def prepend_key_line(output, entries, *, title):
     draw = ImageDraw.Draw(output)
-    label(draw, (13, 13), title, size=max(12, output.width // 78))
-    show = entries[:max(1, output.width // 120)]
+    title_size = max(12, output.width // 78)
+    label(draw, (13, 13), title, size=title_size)
+    font_size = max(9, output.width // 132)
+    typography = font(font_size)
+    available = output.width - 22
+
+    def measure(text):
+        return draw.textbbox((0, 0), text, font=typography)[2] + 30
+
+    candidates = [(str(text), shade) for text, shade in entries]
+    # Shorten labels only when the full key would not fit the image width.
+    while sum(measure(text) for text, _ in candidates) > available:
+        longest = max(range(len(candidates)), key=lambda i: len(candidates[i][0]))
+        text, shade = candidates[longest]
+        if len(text) <= 4:
+            break
+        candidates[longest] = (text[:max(3, len(text) - 4)].rstrip() + "…", shade)
     row = output.height - 24
     x = 11
-    for text, shade in show:
+    for text, shade in candidates:
         draw.rectangle((x, row, x + 9, row + 9), fill=shade)
-        label(draw, (x + 14, row - 4), text, size=max(9, output.width // 120))
-        x += max(82, len(text) * 7 + 20)
+        label(draw, (x + 14, row - 4), text, size=font_size)
+        x += measure(text)
     return output
 
 
