@@ -169,6 +169,11 @@ def register_inspections(api, store, work):
     def place(key):
         return alignment.create_alignment(store, identifier(key), body()), 201
 
+    @api.post("/api/frames/<key>/placement/suggest")
+    @work
+    def place_suggest(key):
+        return alignment.placement_suggestions(store, identifier(key), body())
+
     @api.post("/api/frames/<key>/window-compare")
     @work
     def compare_window(key):

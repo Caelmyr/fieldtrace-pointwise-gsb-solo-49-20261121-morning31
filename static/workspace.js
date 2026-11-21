@@ -78,33 +78,264 @@ function qualityDialog(frame,refresh){
     const item=await send(`${PREFIX}/${frame.id}/quality`,values);await finishRecord(item,refresh);
   },{confirm:"Save quality map"});
 }
+async function placementEntry(frame,refresh,manual=false){
+  const all=await api(`/api/frames?limit=160&deployment_id=${frame.deployment_id}`);
+  const candidates=all.frames;
+  if(manual)return manualPlacementDialog(frame,refresh,candidates);
+  return placementAssistDialog(frame,refresh,candidates);
+}
+
 async function comparisonDialog(frame,refresh,mode){
   const all=await api(`/api/frames?limit=160&deployment_id=${frame.deployment_id}`);
   const candidates=all.frames.filter(f=>f.id!==frame.id&&f.extent.join()===frame.extent.join()&&
     (mode!=="motion"||f.illumination===frame.illumination));
   if(!candidates.length){notice("No comparable viewing photos in this camera deployment.");return;}
-  const label=mode==="motion"?"Find movement candidates":mode==="placement"?"Audit camera placement":"Compare camera windows";
+  const label=mode==="motion"?"Find movement candidates":"Compare camera windows";
   const common=[field("Record title","name",label,{required:true}),pick("Reference photo","reference",candidates.map(a=>[a.id,a.name]),candidates[0].id)];
-  const anchors=[{name:"Far left",before:[.23,.59],after:[.23,.59]},
-    {name:"Far right",before:[.70,.56],after:[.70,.56]},
-    {name:"Near marker",before:[.49,.79],after:[.49,.79]}];
   const extra=mode==="motion"?[
     field("Minimum local change","threshold",.085,{type:"number",step:.005,min:.01,max:.4}),
     field("Smallest candidate area","min_area",60,{type:"number",min:8,max:4000}),
-  ]:mode==="placement"?[
-    field("Matching landmarks","anchors",JSON.stringify(anchors,null,2),{type:"area",wide:true}),
-    field("Allowed displacement (px)","allowed_shift_px",5,{type:"number",step:.5,min:.5}),
-    field("Allowed landmark spread (px)","allowed_spread_px",4,{type:"number",step:.5,min:.5}),
   ]:[
     pick("View style","view",[["two","Side by side"],["wipe","Split at centre"],["alternating","Alternating bands"]],"two"),
     pick("Brightness","brightness",[["color","Ordinary image"],["common-window","Shared luminance window"]],"color"),
     field("Common crop (optional)","box","",{wide:true,help:"Use [x,y,width,height] between 0 and 1."}),
   ];
   showModal(label,[...common,...extra],async(_,values)=>{
-    if(mode==="placement")values.anchors=jsonField(values,"anchors");
     if(mode==="window-compare")values.box=jsonField(values,"box",null);
     const result=await send(`${PREFIX}/${frame.id}/${mode}`,values);await finishRecord(result,refresh);
   },{confirm:"Inspect and save"});
+}
+
+function manualPlacementDialog(frame,refresh,candidates){
+  const all=candidates;
+  const pickList=all.filter(f=>f.id!==frame.id&&f.extent.join()===frame.extent.join());
+  if(!pickList.length){notice("No comparable viewing photos in this camera deployment.");return;}
+  const anchors=[{name:"Far left",before:[.23,.59],after:[.23,.59]},
+    {name:"Far right",before:[.70,.56],after:[.70,.56]},
+    {name:"Near marker",before:[.49,.79],after:[.49,.79]}];
+  showModal("Audit camera placement · manual pairs",[
+    field("Record title","name","Placement audit",{required:true}),
+    pick("Reference photo","reference",pickList.map(a=>[a.id,a.name]),pickList[0].id),
+    field("Matching landmarks","anchors",JSON.stringify(anchors,null,2),
+      {type:"area",wide:true,help:"Each landmark needs a confirmed point on both photos."}),
+    field("Allowed displacement (px)","allowed_shift_px",5,{type:"number",step:.5,min:.5}),
+    field("Allowed landmark spread (px)","allowed_spread_px",4,{type:"number",step:.5,min:.5}),
+  ],async(_,values)=>{
+    values.anchors=jsonField(values,"anchors");
+    const result=await send(`${PREFIX}/${frame.id}/placement`,values);await finishRecord(result,refresh);
+  },{confirm:"Inspect and save"});
+}
+
+const STATE_TEXT={suggested:"Distinct match",ambiguous:"Repeated texture",weak:"Weak match",
+  occluded:"Blocked / unseen",held:"Held","edge-of-frame":"At photo edge"};
+const STATE_HINT={suggested:"#5d8a43",ambiguous:"#a87c2e",weak:"#a04a42",occluded:"#a04a42",
+  held:"#7c8174","edge-of-frame":"#a04a42",confirmed:"#2f5d86",outlier:"#a04a42",fits:"#5d8a43"};
+
+function markerScene(imageUrl,extent,onPick){
+  const image=img(imageUrl,"Placement reference photo","");
+  const canvas=h("canvas",{width:extent[0],height:extent[1],"aria-hidden":"true"});
+  const scene=h("div",{class:"scene"},image,canvas);
+  if(onPick){
+    scene.classList.add("marking");
+    canvas.addEventListener("pointerdown",event=>{
+      const r=canvas.getBoundingClientRect();
+      const point=[Math.min(1,Math.max(0,(event.clientX-r.left)/r.width)),
+        Math.min(1,Math.max(0,(event.clientY-r.top)/r.height))];
+      onPick(point);
+    });
+  }
+  return {scene,canvas};
+}
+
+function drawMarks(canvas,marks,colour,selectedIndex=null){
+  const ctx=canvas.getContext("2d");
+  const w=canvas.width,h=canvas.height;
+  ctx.clearRect(0,0,w,h);
+  marks.forEach((m,i)=>{
+    const x=m.before[0]*w,y=m.before[1]*h;
+    ctx.beginPath();ctx.arc(x,y,Math.max(5,w/150),0,Math.PI*2);
+    ctx.lineWidth=Math.max(2,w/380);
+    ctx.strokeStyle=colour;ctx.fillStyle=colour+"55";
+    if(i===selectedIndex){ctx.fillStyle=colour+"aa";}
+    ctx.fill();ctx.stroke();
+    ctx.fillStyle="#f4f8ed";ctx.font=`700 ${Math.max(11,w/72)}px sans-serif`;
+    ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(i+1),x,y);
+  });
+}
+
+function drawSuggestions(canvas,rows){
+  const ctx=canvas.getContext("2d");
+  const w=canvas.width,h=canvas.height;
+  ctx.clearRect(0,0,w,h);
+  rows.forEach((row,i)=>{
+    const decision=row.decision||"held";
+    const hue=decision==="confirmed"?"#2f5d86":STATE_HINT[row.state]||"#7c8174";
+    (row.candidates||[]).forEach((cand,k)=>{
+      const x=cand.after[0]*w,y=cand.after[1]*h;
+      ctx.beginPath();
+      ctx.arc(x,y,Math.max(5,w/150)+(k===0?2:0),0,Math.PI*2);
+      ctx.lineWidth=k===0?Math.max(2.5,w/300):Math.max(1.4,w/480);
+      ctx.strokeStyle=k===0?hue:"#c9b884";
+      ctx.setLineDash(k===0?[]:[5,4]);
+      ctx.stroke();ctx.setLineDash([]);
+      if(k===0){
+        ctx.fillStyle=hue;ctx.font=`700 ${Math.max(11,w/72)}px sans-serif`;
+        ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.fillText(String(i+1),x,y);
+      }
+    });
+    if(!row.candidates?.length){
+      const x=row.before[0]*w,y=row.before[1]*h;
+      ctx.beginPath();ctx.arc(x,y,Math.max(6,w/140),0,Math.PI*2);
+      ctx.lineWidth=Math.max(2,w/380);ctx.strokeStyle=hue;ctx.stroke();
+    }
+  });
+}
+
+async function placementAssistDialog(frame,refresh,candidates){
+  const all=candidates;
+  const comparable=all.filter(f=>f.id!==frame.id&&f.extent.join()===frame.extent.join());
+  if(!comparable.length){notice("No comparable viewing photos in this camera deployment.");return;}
+  let referenceId=comparable[0].id;
+  let marks=[];
+  let suggestion=null;
+  let selectedMark=null;
+  const extent=frame.extent;
+
+  const referenceImage=img(file(referenceId,"work"),"Earlier reference photo","");
+  const currentImage=img(file(frame.id,"work"),"Current camera photo","");
+  const leftScene=markerScene("",extent,point=>{
+    marks.push({name:`Mark ${marks.length+1}`,before:point.map(v=>Number(v.toFixed(5)))});
+    redrawAll();
+  });
+  const rightScene=markerScene("",extent,null);
+  let manualPickHandler=null;
+  leftScene.scene.replaceChildren(referenceImage,leftScene.canvas);
+  rightScene.scene.replaceChildren(currentImage,rightScene.canvas);
+
+  const referencePicker=pick("Earlier reference photo","reference",
+    comparable.map(a=>[a.id,a.name]),referenceId);
+  referencePicker.querySelector("select").addEventListener("change",event=>{
+    referenceId=event.target.value;
+    referenceImage.src=file(referenceId,"work");
+    marks=[];suggestion=null;selectedMark=null;redrawAll();
+  });
+  const radiusField=field("Search window radius (px)","search_radius_px",28,
+    {type:"number",min:4,max:200,step:1,help:"How far the camera could plausibly have shifted."});
+  const templateField=field("Comparison patch size (px)","template_px",41,
+    {type:"number",min:13,max:240,step:2,help:"Small patches suit thin bark marks; larger patches suit broad features."});
+  const consensusBox=h("div",{class:"consensus",hidden:true});
+  const marksList=h("div",{class:"stacked tight"});
+  const hint=h("p",{class:"muted"},"Click small fixed marks on the earlier photo, then ask for landing points on the current photo. Repeated bark texture and blocked areas stay flagged for your decision.");
+
+  function rowFor(index){
+    const row=suggestion?.suggestions?.find(s=>s.index===index+1);
+    const mark=marks[index];
+    const state=row?.state||"held";
+    const decision=row?.decision||"held";
+    const tag=h("span",{class:`tag ${decision==="confirmed"?"confirmed":state}`},
+      decision==="confirmed"?"Confirmed":STATE_TEXT[state]||"Held");
+    const consensusTag=row?.consensus?h("span",{class:`tag ${row.consensus}`},
+      row.consensus==="fits"?`Shared shift ✓${row.preferred_residual_px!=null?` · ${row.preferred_residual_px}px`:""}`:`Outlier`):null;
+    const candidateItems=(row?.candidates||[]).slice(0,4).map((cand,k)=>h("li",null,
+      h("button",{type:"button",onclick:()=>{
+        row.decision="confirmed";row.confirmed_after=cand.after;redrawAll();
+      }},k===0?"Use best landing":"Use alternative"),
+      h("span",{class:"score"},`score ${cand.score.toFixed(2)} · ${cand.center_px.join(", ")} px`)));
+    const manualPick=h("button",{type:"button",onclick:()=>{
+      if(manualPickHandler)return;
+      rightScene.scene.classList.add("marking");
+      manualPickHandler=event=>{
+        const r=rightScene.canvas.getBoundingClientRect();
+        const point=[Math.min(1,Math.max(0,(event.clientX-r.left)/r.width)),
+          Math.min(1,Math.max(0,(event.clientY-r.top)/r.height))].map(v=>Number(v.toFixed(5)));
+        if(!row.candidates)row.candidates=[];
+        row.decision="confirmed";row.confirmed_after=point;
+        rightScene.canvas.removeEventListener("pointerdown",manualPickHandler);
+        manualPickHandler=null;
+        rightScene.scene.classList.remove("marking");redrawAll();
+      };
+      rightScene.canvas.addEventListener("pointerdown",manualPickHandler);
+      notice("Click the actual landing point on the current photo.");
+    }},"Pick point by hand");
+    const hold=h("button",{type:"button",onclick:()=>{row.decision="held";delete row.confirmed_after;redrawAll();}},"Leave for later");
+    const remove=h("button",{type:"button",class:"danger",onclick:()=>{
+      marks.splice(index,1);if(suggestion){suggestion=null;}selectedMark=null;redrawAll();
+    }},"Remove mark");
+    return h("div",{class:"mark-chip"},
+      h("span",{class:"dot",style:{background:STATE_HINT[state]||"#7c8174"}}),
+      h("div",{class:"grow"},h("strong",null,`${index+1}. ${mark.name}`),
+        row?h("small",null,row.note):h("small",null,"Marked on the earlier photo only.")),
+      tag,consensusTag,
+      row?h("ul",{class:"candidate-list"},candidateItems,
+        h("li",null,manualPick,hold,remove)):remove);
+  }
+
+  function redrawAll(){
+    drawMarks(leftScene.canvas,marks,"#8ee6bc",selectedMark);
+    if(suggestion){
+      const merged=marks.map((m,i)=>{
+        const row=suggestion.suggestions.find(s=>s.index===i+1);
+        return row?{...m,...row}:m;
+      });
+      drawSuggestions(rightScene.canvas,merged);
+      marksList.replaceChildren(...merged.map((_,i)=>rowFor(i)));
+      const c=suggestion.consistency;
+      consensusBox.hidden=false;
+      consensusBox.replaceChildren(
+        h("strong",null,"Do the landing points tell one story?"),
+        h("span",null,c.consensus_shift_px
+          ?`Preferred suggestions share a median shift of ${c.consensus_shift_px.join(", ")} px (tolerance ${c.consistency_tolerance_px} px). ${c.consistent_mark_count} fit, ${c.review_mark_count} need review.`
+          :"Not enough suggestions to form a shared shift."),
+        h("small",{class:"muted"},c.note));
+    }else{
+      drawSuggestions(rightScene.canvas,[]);
+      marksList.replaceChildren(...marks.map((m,i)=>h("div",{class:"mark-chip"},
+        h("span",{class:"dot",style:{background:"#8ee6bc"}}),
+        h("div",{class:"grow"},h("strong",null,`${i+1}. ${m.name}`),
+          h("small",null,`at ${m.before.join(", ")}`)),
+        h("button",{type:"button",onclick:()=>{marks.splice(i,1);redrawAll();}},"Remove"))));
+      consensusBox.hidden=true;
+    }
+  }
+
+  async function requestSuggestions(){
+    if(marks.length<1){notice("Mark at least one fixed feature on the earlier photo.");return;}
+    const values=await send(`${PREFIX}/${frame.id}/placement/suggest`,{
+      reference:referenceId,
+      marks:marks.map(m=>({name:m.name,before:m.before})),
+      search_radius_px:Number(radiusField.value),template_px:Number(templateField.value),
+    });
+    values.suggestions.forEach(row=>{row.decision="held";});
+    suggestion=values;redrawAll();
+  }
+
+  const modal=showModal("Audit camera placement · assisted landing points",[
+    referencePicker,
+    h("div",{class:"actions"},radiusField,templateField,
+      button("Suggest landing points",requestSuggestions,"primary"),
+      button("Undo last mark",()=>{marks.pop();redrawAll();}),
+      button("Clear marks",()=>{marks=[];suggestion=null;redrawAll();})),
+    hint,
+    h("div",{class:"placement-grid"},
+      h("div",{class:"placement-pane"},h("h3",null,"1 · Earlier reference — click fixed marks"),leftScene.scene),
+      h("div",{class:"placement-pane"},h("h3",null,"2 · Current photo — review candidate landings"),rightScene.scene)),
+    consensusBox,
+    h("div",{class:"placement-pane"},h("h3",null,"3 · Confirm each mark (repeated texture and blocked views stay on hold)"),marksList),
+  ],async()=>{
+    if(!suggestion){notice("Suggest landing points and confirm at least three marks first.");return false;}
+    const confirmed=suggestion.suggestions
+      .filter(row=>row.decision==="confirmed"&&row.confirmed_after)
+      .map(row=>({name:marks[row.index-1].name,before:row.before,after:row.confirmed_after}));
+    if(confirmed.length<3){notice("Only operator-confirmed points estimate displacement. Confirm at least three.");return false;}
+    const result=await send(`${PREFIX}/${frame.id}/placement`,{
+      name:"Placement audit",reference:referenceId,anchors:confirmed,
+      allowed_shift_px:5,allowed_spread_px:4,
+    });
+    await finishRecord(result,refresh);
+  },{confirm:"Estimate displacement from confirmed marks"});
+  modal.form.classList.add("wide");
+  redrawAll();
 }
 function localTrace(frame,refresh,points=null){
   showModal("Measure image profile",[
@@ -279,7 +510,8 @@ export async function frameWorkbench(id,tools){
         button("Map image quality",()=>qualityDialog(frame,refresh)),
         button("Find movement candidates",()=>comparisonDialog(frame,refresh,"motion")),
         button("Compare camera windows",()=>comparisonDialog(frame,refresh,"window-compare")),
-        button("Audit camera placement",()=>comparisonDialog(frame,refresh,"placement")),
+        button("Audit camera placement",()=>placementEntry(frame,refresh)),
+        button("Manual landmark pairs",()=>placementEntry(frame,refresh,true)),
         button("Measure image profile",()=>localTrace(frame,refresh)),
         button("Inspect marking pattern",()=>textureDialog(frame,refresh)),
         button("Add as identity witness",()=>identityChoice(frame,tools.addPortrait))),
